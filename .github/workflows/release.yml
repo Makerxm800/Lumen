@@ -8,6 +8,11 @@ on:
         required: true
         default: '1.1.0'
         type: string
+      publish_release:
+        description: Create a public GitHub Release after all platform builds pass
+        required: true
+        default: false
+        type: boolean
   push:
     tags:
       - 'v*'
@@ -129,7 +134,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     needs: build
     runs-on: ubuntu-latest
     steps:

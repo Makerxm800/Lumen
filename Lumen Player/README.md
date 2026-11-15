@@ -4,7 +4,7 @@ Lumen is a native Rust media player with a custom dark/purple interface based on
 
 ## Get the release builds
 
-The **Build and release Lumen** GitHub Actions workflow builds Windows x64, macOS Apple Silicon, and macOS Intel packages, then attaches them to a GitHub Release. Start it with **Actions → Build and release Lumen → Run workflow** or push a `v*` tag.
+The **Build and release Lumen** GitHub Actions workflow builds Windows x64, macOS Apple Silicon, and macOS Intel packages. Run it with **Actions → Build and release Lumen → Run workflow** to build/test; enable **Create a public GitHub Release** to publish the builds, or push a `v*` tag to release automatically.
 
 - Windows download: `Lumen-Windows-x64.zip`. Extract the ZIP and run `Lumen.exe`; it includes the portable mpv runtime alongside the app.
 - macOS downloads: `.dmg` and `.zip` for the runner architecture. The Rust app is in a standard `Lumen.app` bundle.
