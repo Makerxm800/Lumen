@@ -1,102 +1,42 @@
-# Prism Player (v1.1.0)
+# Lumen Player — Rust desktop app
 
-A native desktop media player — its own window, taskbar icon, menu-free custom
-UI, drag-and-drop, playlist, and keyboard shortcuts. Plays using your system's
-video codecs (Qt Multimedia), not a browser.
+Lumen is a native Rust media player with a custom dark/purple interface based on the original Lumen look. On Windows, the video surface is embedded in the player window. mpv/FFmpeg supplies media decoding; the old Prism Player is not part of this app.
 
-## Run it (Windows, Mac, or Linux)
+## Build a Windows executable
 
-1. Install Python 3.9+ if you don't have it: https://python.org
-2. Open a terminal in this folder and run:
-   ```
-   pip install -r requirements.txt
-   python main.py
-   ```
+The Windows `.exe` must be built on Windows. Install the stable Rust toolchain with Cargo (`https://rustup.rs/`) and 7-Zip, then double-click `build_windows.bat`.
 
-That's it — a window opens. Drag a video file onto it, or use **Open files**.
+On the first build, the script downloads the latest baseline x64 portable mpv build from `shinchiro/mpv-winbuild-cmake` (about 30 MB), extracts it, compiles the Rust app, and packages the player runtime. Internet access is needed for this first build. The output is:
 
-## Turn it into a real installer (Windows) — with working updates & uninstall
-
-This is the recommended way to ship it to yourself or anyone else: a proper
-`Setup.exe` that shows up in **Apps & Features**, puts shortcuts in the Start
-Menu, and — the part you asked for — automatically removes the old version's
-files when you install a newer one, and uninstalls cleanly.
-
-1. Install Inno Setup once (free): https://jrsoftware.org/isdl.php
-2. Double-click `build_installer.bat` in this folder.
-3. It builds `dist\Prism Player.exe`, then packages it into
-   `installer_output\PrismPlayerSetup-1.1.0.exe`.
-
-To ship an update later: bump `MyAppVersion` in `prism_player.iss` (and
-`APP_VERSION` near the top of `main.py` if you want it to show in the
-Settings panel), run `build_installer.bat` again, and hand people the new
-installer — it detects the old install via a fixed app ID, silently
-uninstalls it, then installs the new version in its place. No leftover files,
-no duplicate shortcuts.
-
-Uninstalling works like any other Windows app: Settings → Apps → Prism
-Player → Uninstall, or the "Uninstall Prism Player" shortcut Setup adds to
-the Start Menu folder.
-
-### Just want the .exe, no installer?
-
+```text
+dist/Lumen.exe
+dist/runtime/   # mpv.exe, DLLs, plugins and notices from the portable build
 ```
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "Prism Player" main.py
+
+Keep the `runtime` folder beside `Lumen.exe`; it is required for playback. To use a different mpv distribution, put its complete portable Windows runtime in `runtime/` before building. A signed installer can be made from the output with Inno Setup; no installer or signing certificate is included here.
+
+## Run/build from source on macOS or Linux
+
+Install Rust/Cargo and mpv, then run from this folder:
+
+```bash
+cargo run --manifest-path rust/Cargo.toml
 ```
-Works the same on Mac/Linux too, minus the Windows-specific installer step.
 
-## Settings (gear icon, top right)
+The app searches for mpv in `runtime/`, beside the Lumen executable, or on `PATH`. On Windows, the build embeds the video output in the custom player surface. On macOS/Linux, playback uses mpv's native video window.
 
-Click the ⚙ icon to open a centred settings panel with toggle switches:
+## Playback and features
 
-- **Smooth UI animations** — turn off if you want the control bar to snap
-  instead of fade (useful on slower machines)
-- **Loop playlist** — wraps back to the first video at the end of the queue
-- **Autoplay next** — keep playing through the playlist automatically
-- **Scrubber video peek** — hover the seek bar to see a thumbnail of that
-  point in the video before you click (needs `opencv-python`; the toggle is
-  greyed out and tells you so if it's not installed)
-- **Remember volume** — keeps your volume level the next time you open Prism
+The bundled mpv runtime uses FFmpeg and supports a broad range of common video/music containers and codecs (MP4, MKV, MOV, AVI, WebM, MP3, FLAC, WAV, AAC, Ogg, Opus, and others enabled in that build). Codec support depends on the runtime; DRM-protected, damaged, and unusual formats are not guaranteed.
 
-All settings persist between launches automatically.
+The Rust app includes a custom animated interface, embedded Windows video surface, audio playback, persistent media library and queue, drag-and-drop, folder scanning, search, play/pause, previous/next, shuffle/repeat, seek, volume, playback speed, audio/subtitle track selection, fullscreen, English/French interface text, and per-user settings. Keyboard shortcuts include Space, arrows, F and Ctrl+O.
 
-## Controls
+## Project layout
 
-- **Space** — play / pause
-- **← / →** — seek 5s back / forward
-- **↑ / ↓** — volume up / down
-- **F** — fullscreen (double-click the video also works)
-- **M** — mute
-- **Esc** — exit fullscreen
-- Drag & drop video files onto the window at any time to queue them
-
-## Supported formats
-
-mp4, webm, ogg, mov, mkv, avi, m4v, wmv, flv — actual playback depends on the
-codecs available on your system (Windows' Media Foundation backend covers
-mp4/wmv/mov well out of the box; for obscure codecs you may need Qt's
-multimedia backend's codec pack, or an alternate build with `python-vlc`
-instead of Qt Multimedia if you want VLC's own decoders).
-
-## Fixed in this version
-
-- Video peek thumbnail now follows your actual cursor position while
-  dragging the seek bar — it used to always show the same spot regardless
-  of where you dragged to.
-- End-of-video logic cleaned up (dead code path removed) — loop/autoplay
-  behave consistently now.
-- Peek thumbnail no longer hammers the CPU on every pixel of mouse
-  movement — it's throttled.
-- The old video's peek thumbnail no longer lingers on screen after
-  switching to a new one.
-- Settings panel's fade animation no longer risks stacking duplicate
-  callbacks if you open/close it quickly.
-
-## Notes
-
-- This is pure Python + PySide6 (Qt) — no internet connection needed, no data
-  ever leaves your machine.
-- Want the icon as its own file instead of a drawn pixmap, or a custom
-  installer (.msi), or the web version converted into this one feature set —
-  just ask.
+- `rust/` — primary Rust application and Cargo project.
+- `build_windows.bat` — Windows release build and runtime packaging.
+- `prepare_runtime.ps1` — downloads and extracts a portable x64 mpv runtime when needed.
+- `runtime/` — bundled media runtime; ignored by Git.
+- `lumen.py` — earlier Python implementation retained as reference; not used by the Rust build.
+- `main.py` — compatibility launcher for an already-built Rust executable.
+- `icon.png` — embedded app icon source.

@@ -42,13 +42,72 @@ SPEEDS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0]
 BAR_H = 104
 DRAWER_W = 340
 
-DATA = Path(os.environ.get("APPDATA", str(Path.home()))) / "Lumen"
+if os.name == "nt":
+    _config_root = Path(os.environ.get("APPDATA", str(Path.home())))
+else:
+    _config_root = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+DATA = _config_root / "Lumen"
 DEFAULTS = {
     "dark": True, "accent": "#8B5CF6", "toasts": True,
     "resume": True, "autonext": True, "autosave": True, "autoscan": True, "autohide": True,
     "remember_vol": True, "volume": 0.8, "muted": False, "on_top": False, "seek_step": 10,
     "shuffle": False, "repeat": 0, "folders": [], "geometry": "", "sort": 0, "kind": 0,
-    "last_dir": str(Path.home()),
+    "last_dir": str(Path.home()), "language": "system",
+}
+
+# Core interface translations. Media titles, file names, and metadata are never translated.
+FR = {
+    "Now Playing": "En lecture", "Player": "Lecteur", "Library": "Bibliothèque", "Settings": "Paramètres",
+    "Details": "Détails", "Up Next": "À suivre", "Nothing playing": "Rien en lecture",
+    "Open a file or drop one here": "Ouvrez ou déposez un fichier ici", "Search your library": "Rechercher dans la bibliothèque",
+    "All": "Tout", "Video": "Vidéo", "Music": "Musique", "Recently added": "Ajouts récents",
+    "Recently played": "Écoutés récemment", "Name": "Nom", "Size": "Taille", "Add files": "Ajouter des fichiers",
+    "Add folder": "Ajouter un dossier", "Play all": "Tout lire", "Appearance": "Apparence", "Dark mode": "Mode sombre",
+    "Switch between the dark and light look.": "Basculer entre les thèmes sombre et clair.",
+    "Dark mode on": "Mode sombre activé", "Light mode on": "Mode clair activé", "Accent color": "Couleur d’accentuation",
+    "Used for buttons, sliders and highlights.": "Utilisée pour les boutons, curseurs et éléments en évidence.",
+    "Accent color changed": "Couleur d’accentuation modifiée", "Notifications": "Notifications",
+    "Small messages when you toggle something or change speed and volume.": "Messages lors d’un changement de réglage, de vitesse ou de volume.",
+    "Notifications on": "Notifications activées", "Notifications off": "Notifications désactivées",
+    "Playback": "Lecture", "Resume where you left off": "Reprendre où vous en étiez",
+    "Videos and songs continue from the last position.": "Reprendre les vidéos et chansons à la dernière position.",
+    "Resume on": "Reprise activée", "Resume off": "Reprise désactivée", "Play next automatically": "Lire le suivant automatiquement",
+    "Move on to the next item in the queue when one ends.": "Passer à l’élément suivant de la file à la fin de la lecture.",
+    "Auto-play next on": "Lecture suivante activée", "Auto-play next off": "Lecture suivante désactivée",
+    "Remember volume": "Mémoriser le volume", "Start with the volume you used last time.": "Reprendre le volume utilisé précédemment.",
+    "Volume is remembered": "Volume mémorisé", "Volume resets each launch": "Volume réinitialisé au démarrage",
+    "Skip step": "Intervalle de saut", "How far the left and right arrow keys jump.": "Durée du saut avec les flèches gauche et droite.",
+    "Auto-hide controls in fullscreen": "Masquer les commandes en plein écran",
+    "Controls and cursor fade out while you watch.": "Les commandes et le curseur disparaissent pendant la lecture.",
+    "Auto-hide on": "Masquage automatique activé", "Auto-hide off": "Masquage automatique désactivé",
+    "Always on top": "Toujours au premier plan", "Keep the player above other windows.": "Garder le lecteur au-dessus des autres fenêtres.",
+    "Always on top off": "Premier plan désactivé", "Library": "Bibliothèque",
+    "Save opened files automatically": "Enregistrer automatiquement les fichiers ouverts",
+    "Every video or song you open is added to your Library, in any format.": "Chaque vidéo ou chanson ouverte est ajoutée à la bibliothèque.",
+    "Auto-save on": "Enregistrement automatique activé", "Auto-save off": "Enregistrement automatique désactivé",
+    "Scan watched folders on startup": "Analyser les dossiers surveillés au démarrage",
+    "New videos and music in your folders show up by themselves.": "Les nouveaux médias des dossiers apparaissent automatiquement.",
+    "Startup scan on": "Analyse au démarrage activée", "Startup scan off": "Analyse au démarrage désactivée",
+    "Scan now": "Analyser", "Remove selected": "Supprimer la sélection", "Watched folders": "Dossiers surveillés",
+    "Lumen saves every video and song it finds in these folders.": "Lumen ajoute les médias trouvés dans ces dossiers.",
+    "Clear library": "Vider la bibliothèque", "Removes the list only. Your files are never touched.": "Efface la liste seulement, sans toucher aux fichiers.",
+    "Library cleared": "Bibliothèque vidée", "Windows": "Windows", "Add": "Ajouter", "Remove": "Supprimer",
+    "Show Lumen in 'Open with'": "Afficher Lumen dans « Ouvrir avec »",
+    "Adds Lumen to the right-click menu of every video and music file.": "Ajoute Lumen au menu contextuel des fichiers média.",
+    "Keyboard": "Raccourcis clavier", "About": "À propos", "Open files": "Ouvrir des fichiers",
+    "Open files (Ctrl+O)": "Ouvrir des fichiers (Ctrl+O)", "Open media": "Ouvrir un média", "Open folder": "Ouvrir un dossier",
+    "Play / Pause (Space)": "Lire / Pause (Espace)", "Fullscreen (F)": "Plein écran (F)", "Mute (M)": "Muet (M)",
+    "Previous (P)": "Précédent (P)", "Next (N)": "Suivant (N)", "Shuffle (queue order)": "Aléatoire (ordre de la file)",
+    "Subtitles": "Sous-titres", "Audio": "Audio", "Details & queue (I)": "Détails et file (I)",
+    "Play / Pause (Space)": "Lire / Pause (Espace)", "Fullscreen (F)": "Plein écran (F)", "Mute (M)": "Muet (M)",
+    "Open files (Ctrl+O)": "Ouvrir des fichiers (Ctrl+O)", "Clear queue": "Vider la file", "Queue cleared": "File vidée",
+    "Nothing here yet": "Rien pour le moment", "Play anything": "Lire vos médias", "Open a folder to play": "Ouvrir un dossier pour lire",
+    "Added": "Ajouté", "Removed": "Supprimé", "Show in folder": "Afficher dans le dossier", "Repeat": "Répéter",
+    "Off": "Désactivé", "Repeat off": "Répétition désactivée", "Repeat all": "Tout répéter", "Repeat one": "Répéter un élément",
+    "APPEARANCE": "APPARENCE", "PLAYBACK": "LECTURE", "LIBRARY": "BIBLIOTHÈQUE", "WINDOWS": "WINDOWS",
+    "KEYBOARD": "RACCOURCIS CLAVIER", "ABOUT": "À PROPOS",
+    "Language": "Langue", "Choose the interface language.": "Choisir la langue de l’interface.",
+    "System default": "Langue du système", "English": "Anglais", "Français": "Français",
 }
 
 
@@ -1325,6 +1384,7 @@ class Main(QWidget):
         self._bar_target = 1.0
 
         self.build_ui()
+        self.apply_language()
         self.build_engine()
         QApplication.instance().setStyleSheet(build_qss())
         QApplication.instance().installEventFilter(self)
@@ -1597,6 +1657,13 @@ class Main(QWidget):
             self.swatches.append(b)
             swl.addWidget(b)
         row(c, "Accent color", "Used for buttons, sliders and highlights.", sw)
+        self.language_combo = QComboBox()
+        for label, code in (("System default", "system"), ("English", "en"), ("Français", "fr")):
+            self.language_combo.addItem(label, code)
+        selected_language = self.language_combo.findData(self.s.get("language", "system"))
+        self.language_combo.setCurrentIndex(max(0, selected_language))
+        self.language_combo.currentIndexChanged.connect(self.set_language)
+        row(c, "Language", "Choose the interface language.", self.language_combo)
         row(c, "Notifications", "Small messages when you toggle something or change speed and volume.",
             self.bind_toggle("toasts", "Notifications on", "Notifications off"))
 
@@ -1667,13 +1734,72 @@ class Main(QWidget):
         k.setContentsMargins(0, 14, 0, 14)
         c.addWidget(k)
         c = card("About")
-        a = QLabel(f"{APP} {VERSION} - plays everything FFmpeg can decode.")
+        a = QLabel(f"{APP} {VERSION} - uses the media formats supported by Qt Multimedia.")
         a.setObjectName("rowDesc")
         a.setContentsMargins(0, 14, 0, 14)
         c.addWidget(a)
         col.addStretch(1)
         sc.setWidget(body)
         return sc
+
+    def set_language(self, index):
+        if not hasattr(self, "language_combo"):
+            return
+        self.s["language"] = self.language_combo.itemData(index) or "system"
+        self.store.save()
+        self.apply_language()
+
+    def apply_language(self):
+        """Translate static interface text while leaving user media metadata untouched."""
+        language = self.s.get("language", "system")
+        french = language == "fr" or (language == "system" and QLocale.system().name().lower().startswith("fr"))
+        translations = FR if french else {}
+        if hasattr(self, "sort_btn") and hasattr(self, "SORTS"):
+            sort_index = max(0, min(len(self.SORTS) - 1, int(self.s.get("sort", 0))))
+            self.sort_btn.setProperty("lumen_source_text", self.SORTS[sort_index])
+            self.sort_btn.setText(translations.get(self.SORTS[sort_index], self.SORTS[sort_index]))
+        dynamic_labels = {getattr(self, name, None) for name in ("det_title", "np_title", "np_sub", "toast", "count_lbl")}
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget, QLabel):
+                if widget in dynamic_labels:
+                    continue  # Keep media metadata, counts, and transient messages untouched.
+                source = widget.property("lumen_source_text")
+                if source is None:
+                    source = widget.text()
+                    widget.setProperty("lumen_source_text", source)
+                widget.setText(translations.get(source, source))
+            elif isinstance(widget, QAbstractButton):
+                source = widget.property("lumen_source_text")
+                if source is None:
+                    source = widget.text()
+                    widget.setProperty("lumen_source_text", source)
+                widget.setText(translations.get(source, source))
+            elif isinstance(widget, QLineEdit):
+                source = widget.property("lumen_source_placeholder")
+                if source is None:
+                    source = widget.placeholderText()
+                    widget.setProperty("lumen_source_placeholder", source)
+                widget.setPlaceholderText(translations.get(source, source))
+            elif isinstance(widget, Segmented):
+                source = widget.property("lumen_source_labels")
+                if source is None:
+                    source = list(widget.labels)
+                    widget.setProperty("lumen_source_labels", source)
+                widget.labels = [translations.get(label, label) for label in source]
+                widget._sw = max(62, max(len(label) for label in widget.labels) * 9 + 30)
+                widget.setFixedSize(widget._sw * len(widget.labels) + 8, 38)
+                widget.update()
+            tip = widget.property("lumen_source_tooltip")
+            if tip is None:
+                tip = widget.toolTip()
+                widget.setProperty("lumen_source_tooltip", tip)
+            if tip:
+                widget.setToolTip(translations.get(tip, tip))
+        if hasattr(self, "language_combo"):
+            # Keep language names recognizable regardless of the selected UI language.
+            self.language_combo.setItemText(0, "System default" if not french else "Langue du système")
+            self.language_combo.setItemText(1, "English" if not french else "Anglais")
+            self.language_combo.setItemText(2, "Français")
 
     def build_controls(self):
         w = QWidget()
@@ -2223,8 +2349,9 @@ class Main(QWidget):
 
     def sort_menu(self):
         m = QMenu(self)
+        french = self.s.get("language") == "fr" or (self.s.get("language") == "system" and QLocale.system().name().lower().startswith("fr"))
         for i, name in enumerate(self.SORTS):
-            a = m.addAction(name)
+            a = m.addAction(FR.get(name, name) if french else name)
             a.setCheckable(True)
             a.setChecked(i == self.s["sort"])
             a.triggered.connect(lambda _=False, i=i: self.set_sort(i))
@@ -2232,7 +2359,9 @@ class Main(QWidget):
 
     def set_sort(self, i):
         self.s["sort"] = i
-        self.sort_btn.setText(self.SORTS[i])
+        french = self.s.get("language") == "fr" or (self.s.get("language") == "system" and QLocale.system().name().lower().startswith("fr"))
+        self.sort_btn.setProperty("lumen_source_text", self.SORTS[i])
+        self.sort_btn.setText(FR.get(self.SORTS[i], self.SORTS[i]) if french else self.SORTS[i])
         self.sort_btn.updateGeometry()
         self.queue_save()
         self.refresh_library()
@@ -2484,7 +2613,10 @@ class Main(QWidget):
         cur = self.pages.currentIndex()
         for k, b in enumerate(self.nav):
             b.setChecked(k == i)
-        self.page_title.setText(["Now Playing", "Library", "Settings"][i])
+        title = ["Now Playing", "Library", "Settings"][i]
+        self.page_title.setProperty("lumen_source_text", title)
+        french = self.s.get("language") == "fr" or (self.s.get("language") == "system" and QLocale.system().name().lower().startswith("fr"))
+        self.page_title.setText(FR.get(title, title) if french else title)
         if i == cur:
             return
         self.pages.setCurrentIndex(i)

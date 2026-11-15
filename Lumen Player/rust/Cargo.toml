@@ -1,0 +1,18 @@
+[package]
+name = "lumen-player"
+version = "1.1.0"
+edition = "2021"
+license = "MIT"
+description = "A native Rust media player with a polished Lumen interface"
+
+[[bin]]
+name = "Lumen"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = true }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+raw-window-handle = "0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
