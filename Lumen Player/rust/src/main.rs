@@ -337,10 +337,10 @@ impl Mpv {
             self.child = None; self.ipc = None; return;
         }
         if let Some(response) = self.request(json!({"command": ["get_property", "time-pos"], "request_id": 20})) {
-            if let Some(position) = response.get("data").and_then(Value::as_f64()) { self.position = position.max(0.0); }
+            if let Some(position) = response.get("data").and_then(Value::as_f64) { self.position = position.max(0.0); }
         }
         if let Some(response) = self.request(json!({"command": ["get_property", "duration"], "request_id": 21})) {
-            if let Some(duration) = response.get("data").and_then(Value::as_f64()) { self.duration = duration.max(0.0); }
+            if let Some(duration) = response.get("data").and_then(Value::as_f64) { self.duration = duration.max(0.0); }
         }
         if self.tracks_dirty {
             if let Some(response) = self.request(json!({"command": ["get_property", "track-list"], "request_id": 22})) {
