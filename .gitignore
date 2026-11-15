@@ -1,0 +1,16 @@
+# Python legacy/reference files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Rust and packaging outputs
+**/target/
+build/
+dist/
+*.spec.tmp
+
+# Local media runtime, installer outputs and logs
+Lumen Player/runtime/
+installer_output/
+*.log

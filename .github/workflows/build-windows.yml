@@ -1,0 +1,30 @@
+name: Build Lumen for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Lumen Player/rust/**'
+      - 'Lumen Player/build_windows.bat'
+      - 'Lumen Player/prepare_runtime.ps1'
+      - 'Lumen Player/icon.png'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile and run Rust unit tests
+        run: cargo test --manifest-path "Lumen Player/rust/Cargo.toml"
+      - name: Build portable player and mpv runtime
+        shell: pwsh
+        run: '& "Lumen Player\build_windows.bat"'
+      - name: Upload portable Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lumen-Windows-x64
+          path: Lumen Player/dist/
+          if-no-files-found: error
+          retention-days: 14
