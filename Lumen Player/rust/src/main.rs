@@ -180,7 +180,10 @@ impl Mpv {
     fn executable() -> Option<PathBuf> {
         let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
         let name = if cfg!(windows) { "mpv.exe" } else { "mpv" };
-        for candidate in [exe_dir.join("runtime").join(name), exe_dir.join(name)] {
+        let mut candidates = vec![exe_dir.join("runtime").join(name), exe_dir.join(name)];
+        #[cfg(target_os = "macos")]
+        candidates.extend([PathBuf::from("/opt/homebrew/bin/mpv"), PathBuf::from("/usr/local/bin/mpv"), PathBuf::from("/opt/local/bin/mpv")]);
+        for candidate in candidates {
             if candidate.is_file() { return Some(candidate); }
         }
         std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|p| p.join(name)).find(|p| p.is_file()))
@@ -188,7 +191,13 @@ impl Mpv {
 
     fn start(&mut self) -> Result<(), String> {
         if self.child.as_mut().and_then(|c| c.try_wait().ok()).flatten().is_none() && self.child.is_some() { return Ok(()); }
-        let program = Self::executable().ok_or_else(|| "mpv runtime not found. Put mpv.exe and its complete portable runtime in the app's runtime folder.".to_owned())?;
+        let program = Self::executable().ok_or_else(|| {
+            if cfg!(target_os = "macos") {
+                "mpv was not found. Install the playback engine with `brew install mpv`, then reopen Lumen.".to_owned()
+            } else {
+                "mpv runtime not found. Put mpv.exe and its complete portable runtime in the app's runtime folder.".to_owned()
+            }
+        })?;
         let data = data_dir();
         fs::create_dir_all(&data).map_err(|e| format!("Cannot create player data folder: {e}"))?;
         #[cfg(windows)]
