@@ -1,42 +1,39 @@
 # Lumen Player — Rust desktop app
 
-Lumen is a native Rust media player with a custom dark/purple interface based on the original Lumen look. On Windows, the video surface is embedded in the player window. mpv/FFmpeg supplies media decoding; the old Prism Player is not part of this app.
+Lumen is a native Rust media player with a custom dark/purple interface based on the original Lumen look. On Windows, video is embedded in the player window. Playback and broad codec support come from mpv/FFmpeg; the old Prism Player is not included.
 
-## Build a Windows executable
+## Get the release builds
 
-The Windows `.exe` must be built on Windows. Install the stable Rust toolchain with Cargo (`https://rustup.rs/`) and 7-Zip, then double-click `build_windows.bat`.
+The **Build and release Lumen** GitHub Actions workflow builds Windows x64, macOS Apple Silicon, and macOS Intel packages. Run it with **Actions → Build and release Lumen → Run workflow** to build/test; enable **Create a public GitHub Release** to publish the builds, or push a `v*` tag to release automatically.
 
-On the first build, the script downloads the latest baseline x64 portable mpv build from `shinchiro/mpv-winbuild-cmake` (about 30 MB), extracts it, compiles the Rust app, and packages the player runtime. Internet access is needed for this first build. The output is:
+- Windows download: `Lumen-Windows-x64.zip`. Extract the ZIP and run `Lumen.exe`; it includes the portable mpv runtime alongside the app.
+- macOS downloads: `.dmg` and `.zip` for the runner architecture. The Rust app is in a standard `Lumen.app` bundle.
 
-```text
-dist/Lumen.exe
-dist/runtime/   # mpv.exe, DLLs, plugins and notices from the portable build
+The macOS build needs mpv installed for playback: open Terminal and run `brew install mpv`. The app checks the common Homebrew/MacPorts locations and `PATH`. macOS packages are ad-hoc signed, not notarized; on first launch, Control-click the app and choose **Open** if Gatekeeper asks.
+
+## Build manually
+
+Install stable Rust/Cargo. On Windows, also install 7-Zip, then run `prepare_runtime.ps1` and build from this folder:
+
+```powershell
+cargo test --manifest-path rust/Cargo.toml
+cargo build --release --manifest-path rust/Cargo.toml
 ```
 
-Keep the `runtime` folder beside `Lumen.exe`; it is required for playback. To use a different mpv distribution, put its complete portable Windows runtime in `runtime/` before building. A signed installer can be made from the output with Inno Setup; no installer or signing certificate is included here.
-
-## Run/build from source on macOS or Linux
-
-Install Rust/Cargo and mpv, then run from this folder:
-
-```bash
-cargo run --manifest-path rust/Cargo.toml
-```
-
-The app searches for mpv in `runtime/`, beside the Lumen executable, or on `PATH`. On Windows, the build embeds the video output in the custom player surface. On macOS/Linux, playback uses mpv's native video window.
+The Windows packager in GitHub Actions prepares the mpv runtime and produces the portable ZIP. On macOS or Linux, install mpv (`brew install mpv` on macOS) and use `cargo run --manifest-path rust/Cargo.toml`.
 
 ## Playback and features
 
-The bundled mpv runtime uses FFmpeg and supports a broad range of common video/music containers and codecs (MP4, MKV, MOV, AVI, WebM, MP3, FLAC, WAV, AAC, Ogg, Opus, and others enabled in that build). Codec support depends on the runtime; DRM-protected, damaged, and unusual formats are not guaranteed.
+The mpv runtime uses FFmpeg and supports a broad range of common video/music containers and codecs, including MP4, MKV, MOV, AVI, WebM, MP3, FLAC, WAV, AAC, Ogg and Opus. Exact codec support depends on the runtime; DRM-protected, damaged, and unusual media are not guaranteed.
 
-The Rust app includes a custom animated interface, embedded Windows video surface, audio playback, persistent media library and queue, drag-and-drop, folder scanning, search, play/pause, previous/next, shuffle/repeat, seek, volume, playback speed, audio/subtitle track selection, fullscreen, English/French interface text, and per-user settings. Keyboard shortcuts include Space, arrows, F and Ctrl+O.
+The Rust app includes the custom animated Lumen interface, Windows embedded video, audio playback, persistent media library/queue, drag-and-drop, folder scanning, search, play/pause, previous/next, shuffle/repeat, seek, volume, playback speed, audio/subtitle track selection, fullscreen, English/French interface text, and per-user settings. Shortcuts include Space, arrow keys, F and Ctrl+O.
 
 ## Project layout
 
 - `rust/` — primary Rust application and Cargo project.
-- `build_windows.bat` — Windows release build and runtime packaging.
-- `prepare_runtime.ps1` — downloads and extracts a portable x64 mpv runtime when needed.
-- `runtime/` — bundled media runtime; ignored by Git.
-- `lumen.py` — earlier Python implementation retained as reference; not used by the Rust build.
-- `main.py` — compatibility launcher for an already-built Rust executable.
+- `.github/workflows/release.yml` — multi-platform build and GitHub Release automation.
+- `prepare_runtime.ps1` — downloads and extracts the portable Windows mpv runtime.
+- `runtime/` — generated Windows media runtime; ignored by Git.
+- `lumen.py` — earlier Python implementation retained as reference; not used by Rust builds.
+- `main.py` — compatibility launcher for a previously built Rust executable.
 - `icon.png` — embedded app icon source.

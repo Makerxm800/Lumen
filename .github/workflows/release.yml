@@ -1,0 +1,153 @@
+name: Build and release Lumen
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (without the leading v)
+        required: true
+        default: '1.1.0'
+        type: string
+      publish_release:
+        description: Create a public GitHub Release after all platform builds pass
+        required: true
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'Lumen Player/rust/**'
+      - 'Lumen Player/prepare_runtime.ps1'
+      - 'Lumen Player/icon.png'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            asset: Windows-x64
+          - runner: macos-15
+            asset: macOS-arm64
+          - runner: macos-15-intel
+            asset: macOS-x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: Lumen Player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Prepare portable mpv runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./prepare_runtime.ps1
+
+      - name: Test Rust app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo test --manifest-path rust/Cargo.toml --message-format short 2>&1 | Tee-Object -FilePath rust-test.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $diag = (Get-Content rust-test.log | Where-Object { $_ -match 'error|could not compile|aborting' } | Select-Object -First 30) -join '%0A'
+            if ($diag) { Write-Output "::error::$diag" }
+            exit $code
+          }
+
+      - name: Test Rust app (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set +e
+          cargo test --manifest-path rust/Cargo.toml --message-format short 2>&1 | tee rust-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            diag=$(grep -E 'error|could not compile|aborting' rust-test.log | head -30 | sed 's/%/%25/g; s/\r/%0D/g' | paste -sd '%0A' -)
+            [ -z "$diag" ] || echo "::error::$diag"
+            exit "$status"
+          fi
+
+      - name: Build Windows portable app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path rust/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path dist/package/runtime -Force | Out-Null
+          Copy-Item rust/target/release/Lumen.exe dist/package/Lumen.exe
+          Copy-Item runtime/* dist/package/runtime/ -Recurse -Force
+          Compress-Archive -Path dist/package/* -DestinationPath dist/Lumen-Windows-x64.zip -Force
+
+      - name: Build macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path rust/Cargo.toml
+          arch="$(uname -m)"
+          bundle="dist/Lumen.app"
+          mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
+          cp rust/target/release/Lumen "$bundle/Contents/MacOS/Lumen"
+          cp icon.png "$bundle/Contents/Resources/icon.png"
+          cat > "$bundle/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>Lumen Player</string>
+            <key>CFBundleDisplayName</key><string>Lumen Player</string>
+            <key>CFBundleIdentifier</key><string>ca.lumen.player</string>
+            <key>CFBundleVersion</key><string>1.1.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>Lumen</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          cat > "$bundle/Contents/Resources/Read Me.txt" <<'INFO'
+          Lumen Player for macOS
+
+          Install mpv before playback: brew install mpv
+          Lumen looks for mpv in /opt/homebrew/bin, /usr/local/bin, /opt/local/bin, and PATH.
+          This app is not notarized. If Gatekeeper blocks it, use Control-click > Open the first time.
+          INFO
+          chmod +x "$bundle/Contents/MacOS/Lumen"
+          codesign --force --deep --sign - "$bundle"
+          ditto -c -k --sequesterRsrc --keepParent "$bundle" "dist/Lumen-macOS-${arch}.zip"
+          hdiutil create -volname "Lumen Player" -srcfolder "$bundle" -ov -format UDZO "dist/Lumen-macOS-${arch}.dmg"
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lumen-${{ matrix.asset }}
+          path: Lumen Player/dist/Lumen-*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Lumen-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create release and attach Windows/macOS builds
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+          name: Lumen ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', inputs.version) }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: release-assets/*
