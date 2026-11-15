@@ -4,13 +4,18 @@ use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense, Stroke
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod update;
+use update::{UpdateRelease, UpdateStatus, Updater};
 
 const BG: Color32 = Color32::from_rgb(10, 10, 17);
 const SIDE: Color32 = Color32::from_rgb(15, 15, 25);
@@ -28,19 +33,32 @@ const MEDIA_EXT: &[&str] = &[
     "aac", "wma", "aiff", "aif", "ape", "ac3", "amr", "wv",
 ];
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
 struct Saved {
     language: String,
     library: Vec<PathBuf>,
     volume: f32,
-    light_theme: bool,
+    speed: f64,
+    repeat: bool,
+    shuffle: bool,
+    ambient: bool,
+    volume_boost: bool,
+    stable_volume: bool,
+    annotations: bool,
+}
+
+impl Default for Saved {
+    fn default() -> Self {
+        Self { language: "system".into(), library: Vec::new(), volume: 80.0, speed: 1.0, repeat: false, shuffle: false,
+            ambient: false, volume_boost: false, stable_volume: false, annotations: true }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
     Player,
     Library,
-    Settings,
 }
 
 trait ReadWrite: Read + Write {}
@@ -160,8 +178,13 @@ struct Mpv {
     position: f64,
     duration: f64,
     volume: f32,
+    volume_max: f32,
     speed: f64,
+    stable_volume: bool,
+    annotations: bool,
     tracks: Vec<MpvTrack>,
+    tracks_dirty: bool,
+    eof_checked: bool,
     last_poll: Instant,
     window_id: Option<usize>,
 }
@@ -170,7 +193,8 @@ impl Default for Mpv {
     fn default() -> Self {
         Self {
             child: None, ipc: None, path: None, error: None, paused: true, ended: false,
-            position: 0.0, duration: 0.0, volume: 80.0, speed: 1.0, tracks: Vec::new(),
+            position: 0.0, duration: 0.0, volume: 80.0, volume_max: 100.0, speed: 1.0,
+            stable_volume: false, annotations: true, tracks: Vec::new(), tracks_dirty: true, eof_checked: false,
             last_poll: Instant::now(), window_id: None,
         }
     }
@@ -206,7 +230,12 @@ impl Mpv {
         let ipc = { let p = data.join("mpv.sock"); let _ = fs::remove_file(&p); p };
         let mut command = Command::new(&program);
         command.arg(format!("--input-ipc-server={}", ipc.display()))
-            .args(["--idle=yes", "--keep-open=yes", "--no-terminal", "--title=Lumen Player"])
+            .arg(format!("--volume-max={}", self.volume_max))
+            .arg(format!("--speed={}", self.speed))
+            .arg(format!("--sid={}", if self.annotations { "auto" } else { "no" }))
+            .args(["--idle=yes", "--keep-open=yes", "--no-terminal", "--title=Lumen Player"]);
+        if self.stable_volume { command.arg("--af=@lumen:acompressor=threshold=0.12:ratio=3"); }
+        command
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         #[cfg(windows)]
         if let Some(window_id) = self.window_id { command.arg(format!("--wid={window_id}")); }
@@ -215,18 +244,27 @@ impl Mpv {
         command.creation_flags(0x0800_0000);
         self.child = Some(command.spawn().map_err(|e| format!("Could not start mpv: {e}"))?);
         self.ipc = Some(ipc);
-        std::thread::sleep(Duration::from_millis(180));
+        std::thread::sleep(Duration::from_millis(25));
         Ok(())
     }
 
     fn connect(&self) -> Option<Box<dyn ReadWrite>> {
         let path = self.ipc.as_ref()?;
-        #[cfg(unix)]
-        { let stream = std::os::unix::net::UnixStream::connect(path).ok()?; let _ = stream.set_read_timeout(Some(Duration::from_millis(200))); Some(Box::new(stream)) }
-        #[cfg(windows)]
-        { Some(Box::new(fs::OpenOptions::new().read(true).write(true).open(path).ok()?)) }
-        #[cfg(not(any(unix, windows)))]
-        { let _ = path; None }
+        for _ in 0..20 {
+            #[cfg(unix)]
+            if let Ok(stream) = std::os::unix::net::UnixStream::connect(path) {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+                return Some(Box::new(stream));
+            }
+            #[cfg(windows)]
+            if let Ok(stream) = fs::OpenOptions::new().read(true).write(true).open(path) {
+                return Some(Box::new(stream));
+            }
+            #[cfg(not(any(unix, windows)))]
+            { let _ = path; return None; }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
     }
 
     fn request(&mut self, command: Value) -> Option<Value> {
@@ -253,41 +291,80 @@ impl Mpv {
     fn open(&mut self, path: PathBuf) {
         self.error = None;
         self.command(vec![json!("loadfile"), json!(path.to_string_lossy()), json!("replace")]);
-        self.path = Some(path); self.paused = false; self.ended = false; self.position = 0.0; self.duration = 0.0;
+        self.path = Some(path); self.paused = false; self.ended = false; self.eof_checked = false; self.tracks_dirty = true; self.tracks.clear(); self.position = 0.0; self.duration = 0.0;
     }
 
     fn toggle(&mut self) { self.command(vec![json!("cycle"), json!("pause")]); self.paused = !self.paused; }
     fn seek(&mut self, seconds: f64) { self.command(vec![json!("seek"), json!(seconds), json!("absolute")]); self.position = seconds.max(0.0); }
-    fn set_volume(&mut self, value: f32) { self.volume = value.clamp(0.0, 100.0); self.command(vec![json!("set_property"), json!("volume"), json!(self.volume)]); }
+    fn set_volume(&mut self, value: f32) {
+        self.volume = value.clamp(0.0, self.volume_max);
+        if self.child.is_some() { self.command(vec![json!("set_property"), json!("volume"), json!(self.volume)]); }
+    }
+
+    fn set_volume_boost(&mut self, enabled: bool) {
+        self.volume_max = if enabled { 130.0 } else { 100.0 };
+        if self.child.is_some() { self.command(vec![json!("set_property"), json!("volume-max"), json!(self.volume_max)]); }
+        if !enabled { self.set_volume(self.volume.min(100.0)); }
+    }
+
+    fn set_speed(&mut self, speed: f64) {
+        self.speed = speed.clamp(0.25, 3.0);
+        if self.child.is_some() { self.command(vec![json!("set_property"), json!("speed"), json!(self.speed)]); }
+    }
+
+    fn set_stable_volume(&mut self, enabled: bool) {
+        self.stable_volume = enabled;
+        if self.child.is_none() { return; }
+        let args = if enabled {
+            vec![json!("af"), json!("add"), json!("@lumen:acompressor=threshold=0.12:ratio=3")]
+        } else {
+            vec![json!("af"), json!("remove"), json!("@lumen")]
+        };
+        self.command(args);
+    }
+
+    fn set_annotations(&mut self, enabled: bool) {
+        self.annotations = enabled;
+        if self.child.is_some() {
+            self.command(vec![json!("set_property"), json!("sid"), json!(if enabled { "auto" } else { "no" })]);
+        }
+    }
 
     fn poll(&mut self) {
-        if self.last_poll.elapsed() < Duration::from_millis(650) { return; }
+        if self.child.is_none() || self.path.is_none() || self.last_poll.elapsed() < Duration::from_millis(350) { return; }
         self.last_poll = Instant::now();
-        if self.child.as_mut().and_then(|c| c.try_wait().ok()).flatten().is_some() { self.child = None; self.ipc = None; return; }
-        for (name, target) in ["time-pos", "duration", "volume", "speed"].into_iter().zip(0..4) {
-            let response = self.request(json!({"command": ["get_property", name], "request_id": 9}));
-            if let Some(value) = response.and_then(|v| v.get("data").cloned()).and_then(|v| v.as_f64()) {
-                match target { 0 => self.position = value.max(0.0), 1 => self.duration = value.max(0.0), 2 => self.volume = value as f32, 3 => self.speed = value, _ => {} }
+        if self.child.as_mut().and_then(|child| child.try_wait().ok()).flatten().is_some() {
+            self.child = None; self.ipc = None; return;
+        }
+        if let Some(response) = self.request(json!({"command": ["get_property", "time-pos"], "request_id": 20})) {
+            if let Some(position) = response.get("data").and_then(Value::as_f64()) { self.position = position.max(0.0); }
+        }
+        if let Some(response) = self.request(json!({"command": ["get_property", "duration"], "request_id": 21})) {
+            if let Some(duration) = response.get("data").and_then(Value::as_f64()) { self.duration = duration.max(0.0); }
+        }
+        if self.tracks_dirty {
+            if let Some(response) = self.request(json!({"command": ["get_property", "track-list"], "request_id": 22})) {
+                if let Some(list) = response.get("data").and_then(Value::as_array) {
+                    self.tracks = list.iter().filter_map(|item| {
+                        let kind = item.get("type")?.as_str()?;
+                        if kind != "audio" && kind != "sub" { return None; }
+                        let id = item.get("id")?.as_i64()?;
+                        let title = item.get("title").and_then(Value::as_str).unwrap_or("");
+                        let lang = item.get("lang").and_then(Value::as_str).unwrap_or("");
+                        let base = if title.is_empty() { format!("{} track {id}", if kind == "audio" { "Audio" } else { "Subtitle" }) } else { title.to_owned() };
+                        Some(MpvTrack { id, label: if lang.is_empty() { base } else { format!("{base} · {lang}") }, selected: item.get("selected").and_then(Value::as_bool).unwrap_or(false), subtitle: kind == "sub" })
+                    }).collect();
+                    self.tracks_dirty = false;
+                }
             }
         }
-        if let Some(response) = self.request(json!({"command": ["get_property", "track-list"], "request_id": 11})) {
-            if let Some(list) = response.get("data").and_then(Value::as_array) {
-                self.tracks = list.iter().filter_map(|item| {
-                    let kind = item.get("type")?.as_str()?;
-                    if kind != "audio" && kind != "sub" { return None; }
-                    let id = item.get("id")?.as_i64()?;
-                    let title = item.get("title").and_then(Value::as_str).unwrap_or("");
-                    let lang = item.get("lang").and_then(Value::as_str).unwrap_or("");
-                    let base = if title.is_empty() { format!("{} track {id}", if kind == "audio" { "Audio" } else { "Subtitle" }) } else { title.to_owned() };
-                    Some(MpvTrack { id, label: if lang.is_empty() { base } else { format!("{base} · {lang}") }, selected: item.get("selected").and_then(Value::as_bool).unwrap_or(false), subtitle: kind == "sub" })
-                }).collect();
+        if !self.eof_checked && self.duration > 0.0 && self.position >= self.duration - 0.2 {
+            if let Some(response) = self.request(json!({"command": ["get_property", "eof-reached"], "request_id": 23})) {
+                if response.get("data").and_then(Value::as_bool).unwrap_or(false) {
+                    self.ended = true;
+                    self.eof_checked = true;
+                }
             }
-        }
-        if let Some(response) = self.request(json!({"command": ["get_property", "pause"], "request_id": 10})) {
-            if let Some(paused) = response.get("data").and_then(Value::as_bool) { self.paused = paused; }
-        }
-        if let Some(response) = self.request(json!({"command": ["get_property", "eof-reached"], "request_id": 12})) {
-            if response.get("data").and_then(Value::as_bool).unwrap_or(false) { self.ended = true; }
         }
     }
 }
@@ -304,9 +381,14 @@ struct LumenApp {
     video: NativeVideo,
     queue: Vec<PathBuf>,
     queue_index: usize,
+    library_revision: u64,
+    library_filter_revision: u64,
+    library_filter_query: String,
+    library_filter: Vec<usize>,
     search: String,
-    shuffle: bool,
-    repeat: bool,
+    settings_open: bool,
+    updater: Updater,
+    folder_scan: Option<Receiver<Vec<PathBuf>>>,
     last_save: Instant,
 }
 
@@ -320,10 +402,20 @@ impl LumenApp {
         let config_path = data_dir().join("library.json");
         let mut saved: Saved = fs::read(&config_path).ok().and_then(|v| serde_json::from_slice(&v).ok()).unwrap_or_default();
         if saved.language.is_empty() { saved.language = "system".into(); }
-        if saved.volume == 0.0 { saved.volume = 80.0; }
+        if !(0.25..=3.0).contains(&saved.speed) { saved.speed = 1.0; }
+        saved.volume = saved.volume.clamp(0.0, if saved.volume_boost { 130.0 } else { 100.0 });
         let queue = saved.library.clone();
-        Self { page: Page::Player, saved, config_path, mpv: Mpv::default(), video: NativeVideo::default(), queue, queue_index: 0,
-            search: String::new(), shuffle: false, repeat: false, last_save: Instant::now() }
+        let mut mpv = Mpv::default();
+        mpv.volume = saved.volume;
+        mpv.speed = saved.speed;
+        mpv.volume_max = if saved.volume_boost { 130.0 } else { 100.0 };
+        mpv.stable_volume = saved.stable_volume;
+        mpv.annotations = saved.annotations;
+        let mut app = Self { page: Page::Player, saved, config_path, mpv, video: NativeVideo::default(), queue, queue_index: 0,
+            search: String::new(), settings_open: false, updater: Updater::default(), folder_scan: None, library_revision: 0,
+            library_filter_revision: u64::MAX, library_filter_query: String::new(), library_filter: Vec::new(), last_save: Instant::now() };
+        app.updater.check();
+        app
     }
 
     fn french(&self) -> bool {
@@ -345,8 +437,13 @@ impl LumenApp {
     }
 
     fn add_paths(&mut self, paths: Vec<PathBuf>) {
-        for path in paths.into_iter().filter(|p| p.is_file() && is_media(p)) { if !self.queue.contains(&path) { self.queue.push(path); } }
+        let old_len = self.queue.len();
+        let mut known: HashSet<PathBuf> = self.queue.iter().cloned().collect();
+        for path in paths {
+            if path.is_file() && is_media(&path) && known.insert(path.clone()) { self.queue.push(path); }
+        }
         if self.queue_index >= self.queue.len() { self.queue_index = self.queue.len().saturating_sub(1); }
+        if self.queue.len() != old_len { self.library_revision = self.library_revision.wrapping_add(1); }
         self.save();
     }
     fn open_dialog(&mut self) {
@@ -365,22 +462,35 @@ impl LumenApp {
     fn next(&mut self, backwards: bool) {
         if self.queue.is_empty() { return; }
         self.queue_index = if backwards { self.queue_index.saturating_sub(1) }
-        else if self.shuffle && self.queue.len() > 1 { (self.queue_index + 1 + (std::process::id() as usize % (self.queue.len() - 1))) % self.queue.len() }
+        else if self.saved.shuffle && self.queue.len() > 1 {
+            let pick = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos() as usize % (self.queue.len() - 1);
+            if pick >= self.queue_index { pick + 1 } else { pick }
+        }
         else if self.queue_index + 1 < self.queue.len() { self.queue_index + 1 }
-        else if self.repeat { 0 } else { return; };
+        else if self.saved.repeat { 0 } else { return; };
         self.play_path(self.queue[self.queue_index].clone());
     }
     fn icon_button(ui: &mut egui::Ui, label: &str, tooltip: &str, size: f32, primary: bool) -> egui::Response {
         let text = RichText::new(label).size(if primary { 22.0 } else { 17.0 }).color(TEXT);
         let mut button = egui::Button::new(text).corner_radius(egui::CornerRadius::same((size / 2.0) as u8));
         if primary { button = button.fill(ACCENT); }
-        ui.add_sized([size, size], button).on_hover_text(tooltip)
+        let response = ui.add_sized([size, size], button);
+        let hover = ui.ctx().animate_value_with_time(
+            ui.make_persistent_id(("icon-hover", tooltip)),
+            if response.hovered() || response.is_pointer_button_down_on() { 1.0 } else { 0.0 },
+            0.12,
+        );
+        if hover > 0.01 {
+            ui.painter().rect_filled(response.rect, egui::CornerRadius::same((size / 2.0) as u8), Color32::from_rgba_unmultiplied(192, 168, 255, (hover * 22.0) as u8));
+        }
+        response.on_hover_text(tooltip)
     }
     fn topbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(match self.page { Page::Player => self.tr("Now Playing", "En lecture"), Page::Library => self.tr("Your Library", "Votre bibliothèque"), Page::Settings => self.tr("Settings", "Paramètres") }).size(23.0).strong().color(TEXT));
+            let title = match self.page { Page::Player => self.tr("Now Playing", "En lecture"), Page::Library => self.tr("Your Library", "Votre bibliothèque") };
+            ui.label(RichText::new(title).size(23.0).strong().color(TEXT));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if Self::icon_button(ui, "⚙", "Settings", 40.0, false).clicked() { self.page = Page::Settings; }
+                if Self::icon_button(ui, "⚙", "Settings", 40.0, false).clicked() { self.settings_open = true; }
                 if Self::icon_button(ui, "＋", "Open media", 40.0, false).clicked() { self.open_dialog(); }
                 ui.add_space(8.0); ui.label(RichText::new("LUMEN  /  MEDIA PLAYER").size(10.0).strong().color(SUB));
             });
@@ -390,7 +500,7 @@ impl LumenApp {
         ui.vertical_centered(|ui| {
             ui.add_space(18.0); ui.label(RichText::new("▷").size(34.0).strong().color(ACCENT));
             ui.label(RichText::new("L U M E N").size(9.0).strong().color(SUB)); ui.add_space(30.0);
-            for (page, icon, text) in [(Page::Player, "▶", self.tr("Player", "Lecteur")), (Page::Library, "▦", self.tr("Library", "Bibliothèque")), (Page::Settings, "⚙", self.tr("Settings", "Paramètres"))] {
+            for (page, icon, text) in [(Page::Player, "▶", self.tr("Player", "Lecteur")), (Page::Library, "▦", self.tr("Library", "Bibliothèque"))] {
                 let selected = self.page == page;
                 let fill = if selected { Color32::from_rgb(47, 37, 77) } else { SIDE };
                 let color = if selected { Color32::from_rgb(192, 168, 255) } else { SUB };
@@ -402,7 +512,7 @@ impl LumenApp {
     }
     fn player_page(&mut self, ui: &mut egui::Ui, scale: f32) {
         let available = ui.available_size();
-        let queue_width = if available.x > 900.0 { 278.0 } else { 0.0 };
+        let queue_width = if available.x > 760.0 { 278.0 } else { 0.0 };
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(Vec2::new((available.x - queue_width - 14.0).max(280.0), available.y), Layout::top_down(Align::Min), |ui| {
                 self.now_playing(ui, scale); ui.add_space(12.0); self.transport(ui);
@@ -431,7 +541,28 @@ impl LumenApp {
                 painter.circle_filled(center, 47.0 + pulse * 2.0, Color32::from_rgba_unmultiplied(CYAN.r(), CYAN.g(), CYAN.b(), 48));
                 painter.circle_filled(center, 47.0, Color32::from_rgb(32, 26, 53));
                 painter.text(center, egui::Align2::CENTER_CENTER, "▶", FontId::proportional(38.0), Color32::from_rgb(211, 195, 255));
-                if path.is_none() { painter.text(egui::pos2(center.x, rect.bottom() - 28.0), egui::Align2::CENTER_CENTER, self.tr("Open a media file to begin", "Ouvrez un fichier média pour commencer"), FontId::proportional(15.0), SUB); }
+                if self.saved.ambient {
+                    let t = ui.ctx().input(|i| i.time) as f32;
+                    let bars = 31;
+                    let bar_width = (rect.width() - 100.0) / bars as f32;
+                    let baseline = rect.bottom() - 22.0;
+                    for i in 0..bars {
+                        let phase = t * 2.0 + i as f32 * 0.51;
+                        let wave = (phase.sin() * 0.5 + (phase * 0.73).cos() * 0.5).abs();
+                        let h = 4.0 + wave * (rect.height() * 0.15).min(34.0);
+                        let x = rect.left() + 50.0 + i as f32 * bar_width;
+                        painter.rect_filled(egui::Rect::from_min_size(egui::pos2(x, baseline - h), Vec2::new((bar_width * 0.55).max(2.0), h)), egui::CornerRadius::same(2), Color32::from_rgba_unmultiplied(52, 232, 192, 115));
+                    }
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                }
+                if path.is_none() { painter.text(egui::pos2(center.x, rect.bottom() - 48.0), egui::Align2::CENTER_CENTER, self.tr("Open a media file to begin", "Ouvrez un fichier média pour commencer"), FontId::proportional(15.0), SUB); }
+            }
+            if response.hovered() {
+                let wheel = ui.ctx().input(|i| i.raw_scroll_delta.y);
+                if wheel.abs() > 0.0 {
+                    let value = (self.mpv.volume + wheel.signum() * (wheel.abs() / 12.0).max(2.0)).clamp(0.0, self.mpv.volume_max);
+                    self.mpv.set_volume(value); self.saved.volume = value;
+                }
             }
             if response.double_clicked() { self.toggle_play(); }
             ui.add_space(15.0);
@@ -457,74 +588,117 @@ impl LumenApp {
             let mut position = self.mpv.position.clamp(0.0, max as f64) as f32;
             ui.horizontal(|ui| {
                 ui.label(RichText::new(time_text(self.mpv.position)).size(11.0).color(SUB));
-                let seek = ui.add_sized([ui.available_width() - 108.0, 18.0], egui::Slider::new(&mut position, 0.0..=max).show_value(false));
-                if seek.drag_stopped() { self.mpv.seek(position as f64); }
+                let seek = ui.add_sized([ui.available_width() - 108.0, 20.0], egui::Slider::new(&mut position, 0.0..=max).show_value(false));
+                if seek.changed() && (seek.drag_stopped() || seek.clicked()) { self.mpv.seek(position as f64); }
                 ui.label(RichText::new(time_text(self.mpv.duration)).size(11.0).color(SUB));
             });
-            ui.add_space(9.0);
-            ui.horizontal(|ui| {
-                if ui.selectable_label(self.shuffle, "⤨").on_hover_text("Shuffle").clicked() { self.shuffle = !self.shuffle; }
-                if Self::icon_button(ui, "|◀", "Previous", 38.0, false).clicked() { self.next(true); }
-                if Self::icon_button(ui, if self.mpv.paused { "▶" } else { "Ⅱ" }, "Play / pause", 52.0, true).clicked() { self.toggle_play(); }
-                if Self::icon_button(ui, "▶|", "Next", 38.0, false).clicked() { self.next(false); }
-                if ui.selectable_label(self.repeat, "↻").on_hover_text("Repeat queue").clicked() { self.repeat = !self.repeat; }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{}%", self.mpv.volume.round() as i32)).size(11.0).color(SUB));
-                    let mut volume = self.mpv.volume;
-                    if ui.add_sized([90.0, 18.0], egui::Slider::new(&mut volume, 0.0..=100.0).show_value(false)).changed() { self.mpv.set_volume(volume); self.saved.volume = volume; }
-                    if Self::icon_button(ui, if self.mpv.volume <= 0.0 { "×" } else { "◖" }, "Mute / unmute", 36.0, false).clicked() { let v = if self.mpv.volume <= 0.0 { 80.0 } else { 0.0 }; self.mpv.set_volume(v); }
-                    if Self::icon_button(ui, "□", "Fullscreen", 36.0, false).clicked() { self.mpv.command(vec![json!("cycle"), json!("fullscreen")]); }
-                    let mut speed = self.mpv.speed;
-                    egui::ComboBox::from_id_salt("speed").selected_text(format!("{speed}×")).show_ui(ui, |ui| {
-                        for rate in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] { ui.selectable_value(&mut speed, rate, format!("{rate}×")); }
-                    });
-                    if (speed - self.mpv.speed).abs() > f64::EPSILON { self.mpv.speed = speed; self.mpv.command(vec![json!("set_property"), json!("speed"), json!(speed)]); }
-                    let tracks = self.mpv.tracks.clone();
-                    let audio_tracks: Vec<MpvTrack> = tracks.iter().filter(|t| !t.subtitle).cloned().collect();
-                    let subtitle_tracks: Vec<MpvTrack> = tracks.iter().filter(|t| t.subtitle).cloned().collect();
-                    if !subtitle_tracks.is_empty() {
-                        let mut selected = subtitle_tracks.iter().find(|t| t.selected).map(|t| t.id);
-                        egui::ComboBox::from_id_salt("subtitle-track").selected_text("CC").show_ui(ui, |ui| {
-                            ui.selectable_value(&mut selected, None, "Subtitles off");
-                            for track in &subtitle_tracks { ui.selectable_value(&mut selected, Some(track.id), &track.label); }
-                        });
-                        if selected != subtitle_tracks.iter().find(|t| t.selected).map(|t| t.id) { self.mpv.command(vec![json!("set_property"), json!("sid"), selected.map(Value::from).unwrap_or(json!("no"))]); }
-                    }
-                    if audio_tracks.len() > 1 {
-                        let mut selected = audio_tracks.iter().find(|t| t.selected).map(|t| t.id);
-                        egui::ComboBox::from_id_salt("audio-track").selected_text("Audio").show_ui(ui, |ui| {
-                            for track in &audio_tracks { ui.selectable_value(&mut selected, Some(track.id), &track.label); }
-                        });
-                        if selected != audio_tracks.iter().find(|t| t.selected).map(|t| t.id) { if let Some(id) = selected { self.mpv.command(vec![json!("set_property"), json!("aid"), json!(id)]); } }
-                    }
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.selectable_label(self.saved.shuffle, "⤨").on_hover_text(self.tr("Shuffle queue", "Lecture aléatoire")).clicked() { self.saved.shuffle = !self.saved.shuffle; }
+                if Self::icon_button(ui, "|◀", self.tr("Previous", "Précédent"), 38.0, false).clicked() { self.next(true); }
+                if Self::icon_button(ui, if self.mpv.paused { "▶" } else { "Ⅱ" }, self.tr("Play / pause", "Lecture / pause"), 52.0, true).clicked() { self.toggle_play(); }
+                if Self::icon_button(ui, "▶|", self.tr("Next", "Suivant"), 38.0, false).clicked() { self.next(false); }
+                if ui.selectable_label(self.saved.repeat, "↻").on_hover_text(self.tr("Repeat queue", "Répéter la file")).clicked() { self.saved.repeat = !self.saved.repeat; }
+                ui.separator();
+                let mut speed = self.mpv.speed;
+                egui::ComboBox::from_id_salt("speed").selected_text(format!("{speed}×")).show_ui(ui, |ui| {
+                    for rate in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] { ui.selectable_value(&mut speed, rate, format!("{rate}×")); }
                 });
+                if (speed - self.mpv.speed).abs() > f64::EPSILON { self.mpv.set_speed(speed); self.saved.speed = speed; }
+                let tracks = self.mpv.tracks.clone();
+                let audio_tracks: Vec<MpvTrack> = tracks.iter().filter(|t| !t.subtitle).cloned().collect();
+                let subtitle_tracks: Vec<MpvTrack> = tracks.iter().filter(|t| t.subtitle).cloned().collect();
+                if !subtitle_tracks.is_empty() {
+                    let original = subtitle_tracks.iter().find(|t| t.selected).map(|t| t.id);
+                    let mut selected = original;
+                    egui::ComboBox::from_id_salt("subtitle-track").selected_text("CC").show_ui(ui, |ui| {
+                        ui.selectable_value(&mut selected, None, self.tr("Subtitles off", "Sous-titres désactivés"));
+                        for track in &subtitle_tracks { ui.selectable_value(&mut selected, Some(track.id), &track.label); }
+                    });
+                    if selected != original { self.mpv.command(vec![json!("set_property"), json!("sid"), selected.map(Value::from).unwrap_or(json!("no"))]); }
+                }
+                if audio_tracks.len() > 1 {
+                    let original = audio_tracks.iter().find(|t| t.selected).map(|t| t.id);
+                    let mut selected = original;
+                    egui::ComboBox::from_id_salt("audio-track").selected_text("Audio").show_ui(ui, |ui| {
+                        for track in &audio_tracks { ui.selectable_value(&mut selected, Some(track.id), &track.label); }
+                    });
+                    if selected != original { if let Some(id) = selected { self.mpv.command(vec![json!("set_property"), json!("aid"), json!(id)]); } }
+                }
+                ui.separator();
+                if Self::icon_button(ui, if self.mpv.volume <= 0.0 { "×" } else { "◖" }, self.tr("Mute / unmute", "Muet / son"), 36.0, false).clicked() {
+                    let v = if self.mpv.volume <= 0.0 { self.saved.volume.max(1.0) } else { self.saved.volume = self.mpv.volume; 0.0 };
+                    self.mpv.set_volume(v);
+                }
+                let mut volume = self.mpv.volume;
+                if ui.add_sized([88.0, 18.0], egui::Slider::new(&mut volume, 0.0..=self.mpv.volume_max).show_value(false)).changed() {
+                    self.mpv.set_volume(volume); self.saved.volume = volume;
+                }
+                ui.label(RichText::new(format!("{}%", self.mpv.volume.round() as i32)).size(11.0).color(SUB));
+                if Self::icon_button(ui, "□", self.tr("Fullscreen", "Plein écran"), 36.0, false).clicked() { self.mpv.command(vec![json!("cycle"), json!("fullscreen")]); }
             });
             if let Some(error) = &self.mpv.error { ui.add_space(8.0); ui.label(RichText::new(error).color(Color32::from_rgb(255, 140, 150)).size(11.0)); }
         });
     }
 
     fn queue_panel(&mut self, ui: &mut egui::Ui, width: f32) {
-        egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0, BORDER)).corner_radius(egui::CornerRadius::same(20)).inner_margin(16).show(ui, |ui| {
-            ui.set_min_width(width - 32.0); ui.set_max_width(width - 32.0);
+        egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0, BORDER)).corner_radius(egui::CornerRadius::same(20)).inner_margin(14).show(ui, |ui| {
+            ui.set_min_width(width - 28.0); ui.set_max_width(width - 28.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(self.tr("Up Next", "À suivre")).size(16.0).strong().color(TEXT));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| { ui.label(RichText::new(self.queue.len().to_string()).size(11.0).color(SUB)); });
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(self.tr("PLAY QUEUE", "FILE DE LECTURE")).size(10.0).strong().color(ACCENT));
+                    ui.label(RichText::new(self.tr("Ready when you are", "À vous de choisir")).size(17.0).strong().color(TEXT));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| { ui.label(RichText::new(format!("{}", self.queue.len())).size(12.0).color(SUB)); });
             });
-            ui.add_space(8.0);
-            if self.queue.is_empty() { ui.add_space(28.0); ui.label(RichText::new(self.tr("Your queue is empty", "Votre file est vide")).color(SUB)); }
-            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                let mut chosen = None;
-                for path in &self.queue {
-                    let selected = self.mpv.path.as_ref() == Some(path);
-                    let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Media");
-                    let color = if selected { Color32::from_rgb(194, 170, 255) } else { TEXT };
-                    let resp = ui.add_sized([width - 54.0, 48.0], egui::Button::new(RichText::new(format!("{}   {title}", if selected { "♫" } else { "♪" })).size(12.0).color(color)).fill(if selected { Color32::from_rgb(43, 34, 67) } else { CARD }));
-                    if resp.clicked() { chosen = Some(path.clone()); }
-                }
-                if let Some(path) = chosen { self.play_path(path); }
-            });
-            ui.add_space(8.0);
-            if ui.add_sized([width - 54.0, 36.0], egui::Button::new(RichText::new(self.tr("Add media", "Ajouter des médias")).color(TEXT)).fill(CARD2)).clicked() { self.open_dialog(); }
+            ui.add_space(10.0);
+            if self.folder_scan.is_some() {
+                ui.horizontal(|ui| { ui.spinner(); ui.label(RichText::new(self.tr("Scanning folders…", "Analyse des dossiers…")).size(10.0).color(SUB)); });
+            }
+            let mut chosen = None;
+            let mut remove = None;
+            let scroll_height = (ui.available_height() - 48.0).clamp(120.0, 520.0);
+            let mut scroll = egui::ScrollArea::vertical().max_height(scroll_height).auto_shrink([false, false]);
+            if self.queue.is_empty() {
+                scroll.show(ui, |ui| {
+                    ui.add_space(20.0);
+                    ui.label(RichText::new(self.tr("Your queue is empty. Add music or video to get started.", "Votre file est vide. Ajoutez de la musique ou une vidéo pour commencer.")).size(12.0).color(SUB));
+                });
+            } else {
+                scroll.show_rows(ui, 54.0, self.queue.len(), |ui, rows| {
+                    for index in rows {
+                        let path = &self.queue[index];
+                        let selected = self.mpv.path.as_ref() == Some(path);
+                        let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Media");
+                        let type_icon = if is_audio(path) { "♫" } else { "▣" };
+                        let fill = if selected { Color32::from_rgb(43, 34, 67) } else { CARD2 };
+                        let text_color = if selected { Color32::from_rgb(211, 194, 255) } else { TEXT };
+                        egui::Frame::new().fill(fill).corner_radius(egui::CornerRadius::same(11)).inner_margin(8).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(type_icon).size(19.0).color(if selected { ACCENT } else { CYAN }));
+                                ui.vertical(|ui| {
+                                    ui.add(egui::Label::new(RichText::new(title).size(12.0).strong().color(text_color)).truncate());
+                                    ui.label(RichText::new(path.extension().and_then(|s| s.to_str()).unwrap_or("MEDIA").to_uppercase()).size(9.0).color(SUB));
+                                });
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if ui.small_button("×").on_hover_text(self.tr("Remove from queue", "Retirer de la file")).clicked() { remove = Some(index); }
+                                    if ui.small_button(if selected { "♫" } else { "▶" }).on_hover_text(self.tr("Play this item", "Lire cet élément")).clicked() { chosen = Some(path.to_path_buf()); }
+                                });
+                            });
+                        });
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                self.queue.remove(index);
+                self.library_revision = self.library_revision.wrapping_add(1);
+                if self.queue.is_empty() { self.queue_index = 0; }
+                else if index < self.queue_index { self.queue_index -= 1; }
+                else if self.queue_index >= self.queue.len() { self.queue_index = self.queue.len() - 1; }
+                self.save();
+            }
+            if let Some(path) = chosen { self.play_path(path); }
+            if ui.add_sized([width - 54.0, 34.0], egui::Button::new(RichText::new(format!("＋  {}", self.tr("Add media", "Ajouter des médias"))).color(TEXT)).fill(CARD2)).clicked() { self.open_dialog(); }
         });
     }
 
@@ -535,72 +709,206 @@ impl LumenApp {
             if ui.button(self.tr("Add files", "Ajouter des fichiers")).clicked() { self.open_dialog(); }
             if ui.button(self.tr("Add folder", "Ajouter un dossier")).clicked() { if let Some(folder) = rfd::FileDialog::new().pick_folder() { self.scan_folder(folder); } }
         });
+        if self.folder_scan.is_some() {
+            ui.horizontal(|ui| { ui.spinner(); ui.label(RichText::new(self.tr("Scanning folders in the background…", "Analyse des dossiers en arrière-plan…")).size(11.0).color(SUB)); });
+        }
         ui.add_space(10.0);
-        let filtered: Vec<PathBuf> = self.queue.iter().filter(|p| p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase().contains(&self.search.to_lowercase())).cloned().collect();
-        ui.label(RichText::new(format!("{} {}", filtered.len(), self.tr("items in your library", "éléments dans la bibliothèque"))).color(SUB));
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let mut chosen = None;
-            for path in filtered {
+        let query = self.search.trim().to_lowercase();
+        if query != self.library_filter_query || self.library_filter_revision != self.library_revision {
+            self.library_filter_query = query.clone();
+            self.library_filter_revision = self.library_revision;
+            self.library_filter = self.queue.iter().enumerate().filter_map(|(index, path)| {
+                let matches = query.is_empty() || path.file_name().and_then(|name| name.to_str()).unwrap_or("").to_lowercase().contains(&query);
+                matches.then_some(index)
+            }).collect();
+        }
+        let filtered_count = self.library_filter.len();
+        ui.label(RichText::new(format!("{} {}", filtered_count, self.tr("items in your library", "éléments dans la bibliothèque"))).color(SUB));
+        let mut chosen = None;
+        egui::ScrollArea::vertical().show_rows(ui, 62.0, filtered_count, |ui, rows| {
+            for row in rows {
+                let path = &self.queue[self.library_filter[row]];
                 let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Media");
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_uppercase();
+                let location = path.parent().unwrap_or(Path::new("")).display().to_string();
                 let response = egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0, BORDER)).corner_radius(egui::CornerRadius::same(12)).inner_margin(12).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(if is_audio(&path) { "♫" } else { "▶" }).size(22.0).color(ACCENT));
-                        ui.vertical(|ui| { ui.label(RichText::new(name).strong().color(TEXT)); ui.label(RichText::new(format!("{ext}   ·   {}", path.parent().unwrap_or(Path::new("")).display())).size(10.0).color(SUB)); });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| { if ui.button(self.tr("Play", "Lire")).clicked() { chosen = Some(path.clone()); } });
+                        ui.label(RichText::new(if is_audio(path) { "♫" } else { "▶" }).size(22.0).color(ACCENT));
+                        ui.vertical(|ui| {
+                            ui.add(egui::Label::new(RichText::new(name).strong().color(TEXT)).truncate());
+                            ui.add(egui::Label::new(RichText::new(format!("{ext}   ·   {location}")).size(10.0).color(SUB)).truncate());
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button(self.tr("Play", "Lire")).clicked() { chosen = Some(path.to_path_buf()); }
+                        });
                     });
                 });
-                if response.response.clicked() { chosen = Some(path); }
-                ui.add_space(5.0);
+                if response.response.clicked() { chosen = Some(path.to_path_buf()); }
             }
-            if let Some(path) = chosen { self.play_path(path); }
         });
+        if let Some(path) = chosen { self.play_path(path); }
     }
 
-    fn settings_page(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(RichText::new(self.tr("Personalize your player", "Personnalisez votre lecteur")).size(22.0).strong().color(TEXT)); ui.add_space(16.0);
-            egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0, BORDER)).corner_radius(egui::CornerRadius::same(18)).inner_margin(18).show(ui, |ui| {
-                ui.label(RichText::new(self.tr("Appearance", "Apparence")).size(16.0).strong().color(TEXT)); ui.add_space(12.0);
-                let language_label = self.tr("Language", "Langue");
-                let system_language = self.tr("System default", "Langue du système");
+    fn settings_popup(&mut self, ctx: &egui::Context) {
+        if !self.settings_open { return; }
+        let mut open = self.settings_open;
+        let mut changed = false;
+        let mut close_clicked = false;
+        let title = self.tr("Lumen settings", "Réglages de Lumen");
+        let subtitle = self.tr("Make the player yours", "Personnalisez votre lecteur");
+        let preferences = self.tr("PREFERENCES", "PRÉFÉRENCES");
+        let language_label = self.tr("Language", "Langue");
+        let system_language = self.tr("System default", "Langue du système");
+        let volume_label = self.tr("Default volume", "Volume par défaut");
+        let playback_label = self.tr("PLAYBACK", "LECTURE");
+        let repeat_label = self.tr("Repeat queue", "Répéter la file");
+        let shuffle_label = self.tr("Shuffle", "Aléatoire");
+        let ambient_label = self.tr("Ambient visuals", "Visuels ambiants");
+        let boost_label = self.tr("Volume boost", "Amplification du volume");
+        let stable_label = self.tr("Stable volume", "Volume régulier");
+        let annotations_label = self.tr("Subtitles and annotations", "Sous-titres et annotations");
+        let engine_label = self.tr("Playback engine", "Moteur de lecture");
+        let engine_hint = self.tr("Lumen uses mpv with FFmpeg. Windows portable builds need the runtime folder; on macOS install mpv with Homebrew.", "Lumen utilise mpv avec FFmpeg. Sous Windows, le dossier runtime est requis; sur macOS, installez mpv avec Homebrew.");
+        let done_label = self.tr("Done", "Terminé");
+        let shortcut_hint = self.tr("Space: play · arrows: seek/volume · F: fullscreen", "Espace : lire · flèches : recherche/volume · F : plein écran");
+        egui::Window::new(title)
+            .id(egui::Id::new("settings-popup"))
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .default_width(500.0)
+            .resizable(false)
+            .collapsible(false)
+            .open(&mut open)
+            .frame(egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0, BORDER)).corner_radius(egui::CornerRadius::same(20)).inner_margin(22))
+            .show(ctx, |ui| {
+                ui.set_min_width(450.0);
+                ui.label(RichText::new(subtitle).size(13.0).color(SUB));
+                ui.add_space(14.0);
+                ui.label(RichText::new(preferences).size(10.0).strong().color(ACCENT));
                 ui.horizontal(|ui| {
                     ui.label(language_label);
                     let selected_language = match self.saved.language.as_str() { "fr" => "Français", "en" => "English", _ => system_language };
                     egui::ComboBox::from_id_salt("language").selected_text(selected_language).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.saved.language, "system".to_owned(), system_language);
-                        ui.selectable_value(&mut self.saved.language, "en".to_owned(), "English");
-                        ui.selectable_value(&mut self.saved.language, "fr".to_owned(), "Français");
+                        changed |= ui.selectable_value(&mut self.saved.language, "system".to_owned(), system_language).changed();
+                        changed |= ui.selectable_value(&mut self.saved.language, "en".to_owned(), "English").changed();
+                        changed |= ui.selectable_value(&mut self.saved.language, "fr".to_owned(), "Français").changed();
                     });
                 });
+                ui.horizontal(|ui| {
+                    ui.label(volume_label);
+                    let maximum = self.mpv.volume_max;
+                    if ui.add(egui::Slider::new(&mut self.saved.volume, 0.0..=maximum).suffix("%")).changed() {
+                        self.mpv.set_volume(self.saved.volume); changed = true;
+                    }
+                });
+                ui.add_space(10.0);
+                ui.label(RichText::new(playback_label).size(10.0).strong().color(ACCENT));
+                ui.horizontal_wrapped(|ui| {
+                    let response = ui.checkbox(&mut self.saved.repeat, repeat_label); changed |= response.changed();
+                    let response = ui.checkbox(&mut self.saved.shuffle, shuffle_label); changed |= response.changed();
+                    let response = ui.checkbox(&mut self.saved.ambient, ambient_label); changed |= response.changed();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    let response = ui.checkbox(&mut self.saved.volume_boost, boost_label);
+                    if response.changed() {
+                        self.mpv.set_volume_boost(self.saved.volume_boost);
+                        self.saved.volume = self.mpv.volume;
+                        changed = true;
+                    }
+                    let response = ui.checkbox(&mut self.saved.stable_volume, stable_label);
+                    if response.changed() { self.mpv.set_stable_volume(self.saved.stable_volume); changed = true; }
+                });
+                let response = ui.checkbox(&mut self.saved.annotations, annotations_label);
+                if response.changed() { self.mpv.set_annotations(self.saved.annotations); changed = true; }
+                ui.add_space(10.0);
+                egui::Frame::new().fill(CARD2).corner_radius(egui::CornerRadius::same(12)).inner_margin(12).show(ui, |ui| {
+                    ui.label(RichText::new(engine_label).strong().color(TEXT));
+                    ui.label(RichText::new(engine_hint).size(11.0).color(SUB));
+                });
+                ui.add_space(12.0);
+                ui.label(RichText::new(self.tr("SOFTWARE UPDATES", "MISES À JOUR")).size(10.0).strong().color(ACCENT));
+                let mut check_updates = false;
+                let mut download_update = None;
+                let mut reveal_update = None;
+                ui.horizontal_wrapped(|ui| {
+                    match &self.updater.status {
+                        UpdateStatus::Idle => { ui.label(RichText::new(self.tr("Check whether a newer Lumen build is available.", "Vérifiez si une nouvelle version de Lumen est disponible.")).size(11.0).color(SUB)); }
+                        UpdateStatus::Checking => { ui.spinner(); ui.label(RichText::new(self.tr("Checking GitHub for updates…", "Recherche de mises à jour sur GitHub…")).size(11.0).color(SUB)); }
+                        UpdateStatus::Current(version) => { ui.label(RichText::new(format!("{} · v{version}", self.tr("You have the latest version", "Vous avez la dernière version"))).size(11.0).color(CYAN)); }
+                        UpdateStatus::Available(release) => {
+                            ui.label(RichText::new(format!("{} · v{}", self.tr("Update available", "Mise à jour disponible"), release.version)).strong().color(TEXT));
+                            if ui.button(self.tr("Download update", "Télécharger la mise à jour")).clicked() { download_update = Some((*release).clone()); }
+                            ui.hyperlink_to(self.tr("Release notes", "Notes de version"), release.page_url.as_str());
+                        }
+                        UpdateStatus::Downloading(release) => { ui.spinner(); ui.label(RichText::new(format!("{} v{}…", self.tr("Downloading", "Téléchargement de"), release.version)).size(11.0).color(SUB)); }
+                        UpdateStatus::Downloaded { release, file } => {
+                            ui.label(RichText::new(format!("{} v{}", self.tr("Downloaded", "Téléchargée"), release.version)).strong().color(CYAN));
+                            if ui.button(self.tr("Show download", "Afficher le fichier")).clicked() { reveal_update = Some(file.to_path_buf()); }
+                        }
+                        UpdateStatus::Error(error) => { ui.label(RichText::new(error).size(11.0).color(Color32::from_rgb(255, 140, 150))); }
+                    }
+                    if matches!(&self.updater.status, UpdateStatus::Idle | UpdateStatus::Current(_) | UpdateStatus::Error(_))
+                        && ui.button(self.tr("Check for updates", "Vérifier les mises à jour")).clicked() { check_updates = true; }
+                });
+                if check_updates { self.updater.check(); }
+                if let Some(release) = download_update { self.updater.download(release); }
+                if let Some(file) = reveal_update {
+                    if let Err(error) = update::reveal_file(&file) { self.updater.status = UpdateStatus::Error(error); }
+                }
+                if matches!(&self.updater.status, UpdateStatus::Downloaded { .. }) {
+                    ui.label(RichText::new(self.tr("Close Lumen, extract the ZIP, and replace the existing app files.", "Fermez Lumen, décompressez le ZIP et remplacez les fichiers de l’application.")).size(10.0).color(SUB));
+                }
                 ui.add_space(8.0);
-                ui.horizontal(|ui| { ui.label(self.tr("Default volume", "Volume par défaut")); if ui.add(egui::Slider::new(&mut self.saved.volume, 0.0..=100.0).suffix("%")).changed() { self.mpv.set_volume(self.saved.volume); } });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button(done_label).clicked() { close_clicked = true; }
+                    ui.label(RichText::new(shortcut_hint).size(10.0).color(SUB));
+                });
             });
-            ui.add_space(12.0);
-            egui::Frame::new().fill(CARD).stroke(Stroke::new(1.0, BORDER)).corner_radius(egui::CornerRadius::same(18)).inner_margin(18).show(ui, |ui| {
-                ui.label(RichText::new(self.tr("Playback engine", "Moteur de lecture")).size(16.0).strong().color(TEXT)); ui.add_space(8.0);
-                ui.label(RichText::new(self.tr("Lumen uses mpv and its FFmpeg-based decoder. Put the portable mpv runtime beside Lumen.exe in a folder named runtime.", "Lumen utilise mpv et son décodeur basé sur FFmpeg. Placez mpv et ses fichiers requis dans le dossier runtime, à côté de Lumen.exe.")).color(SUB).size(12.0));
-            });
-            ui.add_space(12.0);
-            ui.label(RichText::new(self.tr("Keyboard: Space play/pause · ←/→ seek · ↑/↓ volume · F fullscreen · Ctrl+O open", "Clavier : Espace lecture/pause · ←/→ avancer · ↑/↓ volume · F plein écran · Ctrl+O ouvrir")).size(11.0).color(SUB));
-        });
+        self.settings_open = open && !close_clicked;
+        if changed { self.save(); }
     }
 
     fn scan_folder(&mut self, folder: PathBuf) {
-        let mut stack = vec![folder]; let mut found = Vec::new();
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(dir) else { continue };
-            for entry in entries.flatten() { let path = entry.path(); if path.is_dir() { stack.push(path); } else if is_media(&path) { found.push(path); } }
+        if self.folder_scan.is_some() { return; }
+        let (sender, receiver) = mpsc::channel();
+        self.folder_scan = Some(receiver);
+        std::thread::spawn(move || {
+            let mut stack = vec![folder];
+            let mut found = Vec::new();
+            while let Some(directory) = stack.pop() {
+                let Ok(entries) = fs::read_dir(directory) else { continue };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) { stack.push(path); }
+                    else if is_media(&path) { found.push(path); }
+                }
+            }
+            let _ = sender.send(found);
+        });
+    }
+
+    fn poll_folder_scan(&mut self) {
+        let result = self.folder_scan.as_ref().map(|receiver| receiver.try_recv());
+        match result {
+            Some(Ok(paths)) => { self.folder_scan = None; self.add_paths(paths); }
+            Some(Err(TryRecvError::Disconnected)) => { self.folder_scan = None; }
+            Some(Err(TryRecvError::Empty)) | None => {}
         }
-        self.add_paths(found);
     }
 }
 
 impl eframe::App for LumenApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let current_zoom = ctx.zoom_factor();
+        let window_size = ctx.input(|input| input.viewport().inner_rect.map(|rect| rect.size()))
+            .unwrap_or_else(|| ctx.available_rect().size());
+        let unzoomed_size = window_size * current_zoom;
+        let responsive_zoom = (unzoomed_size.x / 1280.0).min(unzoomed_size.y / 800.0).clamp(0.75, 1.15);
+        if (responsive_zoom - current_zoom).abs() > 0.015 { ctx.set_zoom_factor(responsive_zoom); }
         #[cfg(windows)]
         if let Ok(handle) = frame.window_handle() { self.video.ensure(handle.as_raw()); }
         self.mpv.window_id = self.video.window_id();
+        self.updater.poll();
+        self.poll_folder_scan();
         self.mpv.poll();
         if self.mpv.ended { self.mpv.ended = false; self.next(false); }
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>());
@@ -608,13 +916,16 @@ impl eframe::App for LumenApp {
             self.add_paths(dropped.clone());
             if self.mpv.path.is_none() { if let Some(path) = dropped.first() { self.play_path(path.clone()); } }
         }
+        let text_input_active = ctx.wants_keyboard_input() || self.settings_open;
         ctx.input(|i| {
-            if i.key_pressed(egui::Key::Space) { self.toggle_play(); }
-            if i.key_pressed(egui::Key::ArrowRight) { self.mpv.seek(self.mpv.position + 10.0); }
-            if i.key_pressed(egui::Key::ArrowLeft) { self.mpv.seek((self.mpv.position - 10.0).max(0.0)); }
-            if i.key_pressed(egui::Key::ArrowUp) { self.mpv.set_volume(self.mpv.volume + 5.0); }
-            if i.key_pressed(egui::Key::ArrowDown) { self.mpv.set_volume(self.mpv.volume - 5.0); }
-            if i.key_pressed(egui::Key::F) { self.mpv.command(vec![json!("cycle"), json!("fullscreen")]); }
+            if !text_input_active {
+                if i.key_pressed(egui::Key::Space) { self.toggle_play(); }
+                if i.key_pressed(egui::Key::ArrowRight) { self.mpv.seek(self.mpv.position + 10.0); }
+                if i.key_pressed(egui::Key::ArrowLeft) { self.mpv.seek((self.mpv.position - 10.0).max(0.0)); }
+                if i.key_pressed(egui::Key::ArrowUp) { self.mpv.set_volume(self.mpv.volume + 5.0); self.saved.volume = self.mpv.volume; }
+                if i.key_pressed(egui::Key::ArrowDown) { self.mpv.set_volume(self.mpv.volume - 5.0); self.saved.volume = self.mpv.volume; }
+                if i.key_pressed(egui::Key::F) { self.mpv.command(vec![json!("cycle"), json!("fullscreen")]); }
+            }
             if i.modifiers.command && i.key_pressed(egui::Key::O) { self.open_dialog(); }
         });
         if self.page != Page::Player { self.video.hide(); }
@@ -622,8 +933,9 @@ impl eframe::App for LumenApp {
         egui::SidePanel::left("sidebar").exact_width(86.0).frame(egui::Frame::new().fill(SIDE).inner_margin(8)).show(ctx, |ui| self.sidebar(ui));
         egui::CentralPanel::default().frame(egui::Frame::new().fill(BG).inner_margin(egui::Margin::symmetric(24, 18))).show(ctx, |ui| {
             self.topbar(ui); ui.add_space(18.0);
-            match self.page { Page::Player => self.player_page(ui, ctx.pixels_per_point()), Page::Library => self.library_page(ui), Page::Settings => self.settings_page(ui) }
+            match self.page { Page::Player => self.player_page(ui, ctx.pixels_per_point()), Page::Library => self.library_page(ui) }
         });
+        self.settings_popup(ctx);
         ctx.request_repaint_after(Duration::from_millis(80));
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) { self.save(); }
@@ -649,7 +961,7 @@ fn app_icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result {
-    let mut viewport = egui::ViewportBuilder::default().with_title("Lumen Player").with_inner_size([1280.0, 800.0]).with_min_inner_size([900.0, 620.0]);
+    let mut viewport = egui::ViewportBuilder::default().with_title("Lumen Player").with_inner_size([1280.0, 800.0]).with_min_inner_size([760.0, 540.0]);
     if let Some(icon) = app_icon() { viewport = viewport.with_icon(icon); }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native("Lumen Player", options, Box::new(|cc| Ok(Box::new(LumenApp::new(cc)))))
@@ -657,7 +969,7 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_audio, is_media, time_text};
+    use super::{is_audio, is_media, time_text, Saved};
     use std::path::Path;
 
     #[test]
@@ -677,5 +989,15 @@ mod tests {
     fn formats_elapsed_time_with_hours_when_needed() {
         assert_eq!(time_text(65.0), "1:05");
         assert_eq!(time_text(3661.0), "1:01:01");
+    }
+
+    #[test]
+    fn older_settings_files_keep_defaults_for_new_options() {
+        let saved: Saved = serde_json::from_str(r#"{"language":"en","library":[],"volume":0.0}"#).unwrap();
+        assert_eq!(saved.speed, 1.0);
+        assert!(!saved.repeat);
+        assert!(!saved.shuffle);
+        assert!(saved.annotations);
+        assert_eq!(saved.volume, 0.0);
     }
 }

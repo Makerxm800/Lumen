@@ -11,6 +11,8 @@ The **Build and release Lumen** GitHub Actions workflow builds Windows x64, macO
 
 The macOS build needs mpv installed for playback: open Terminal and run `brew install mpv`. The app checks the common Homebrew/MacPorts locations and `PATH`. macOS packages are ad-hoc signed, not notarized; on first launch, Control-click the app and choose **Open** if Gatekeeper asks.
 
+In **Settings → Software updates**, Lumen checks GitHub for the newest release in the background and can download the matching Windows or macOS ZIP into your Downloads folder. After it finishes, close Lumen, extract the ZIP, and replace the existing app files; updates are not installed over a running app.
+
 ## Build manually
 
 Install stable Rust/Cargo. On Windows, also install 7-Zip, then run `prepare_runtime.ps1` and build from this folder:
@@ -26,7 +28,7 @@ The Windows packager in GitHub Actions prepares the mpv runtime and produces the
 
 The mpv runtime uses FFmpeg and supports a broad range of common video/music containers and codecs, including MP4, MKV, MOV, AVI, WebM, MP3, FLAC, WAV, AAC, Ogg and Opus. Exact codec support depends on the runtime; DRM-protected, damaged, and unusual media are not guaranteed.
 
-The Rust app includes the custom animated Lumen interface, Windows embedded video, audio playback, persistent media library/queue, drag-and-drop, folder scanning, search, play/pause, previous/next, shuffle/repeat, seek, volume, playback speed, audio/subtitle track selection, fullscreen, English/French interface text, and per-user settings. Shortcuts include Space, arrow keys, F and Ctrl+O.
+The Rust app includes the custom animated Lumen interface, Windows embedded video, audio playback, persistent media library/queue, drag-and-drop, background folder scanning, virtualized library lists, search, play/pause, previous/next, shuffle/repeat, seek, volume, playback speed, audio/subtitle track selection, fullscreen, English/French interface text, and per-user settings. The UI scales with the window size, and update checks/downloads run off the UI thread. Shortcuts include Space, arrow keys, F and Ctrl+O.
 
 ## Project layout
 
