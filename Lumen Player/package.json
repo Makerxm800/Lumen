@@ -1,0 +1,48 @@
+{
+  "name": "lumen-player",
+  "productName": "Lumen Player",
+  "version": "1.3.0",
+  "description": "A polished Electron media player for video and music",
+  "main": "electron/main.js",
+  "author": "Lumen",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test electron/*.test.js",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0"
+  },
+  "overrides": {
+    "minimatch": "^11.0.8"
+  },
+  "build": {
+    "appId": "ca.lumen.player",
+    "productName": "Lumen Player",
+    "executableName": "Lumen",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "package.json",
+      "resources/**/*"
+    ],
+    "win": {
+      "icon": "icon.ico",
+      "extraResources": [{"from": "runtime", "to": "runtime"}],
+      "target": ["zip"],
+      "artifactName": "Lumen-Windows-x64.${ext}"
+    },
+    "mac": {
+      "icon": "icon.icns",
+      "category": "public.app-category.video",
+      "target": ["zip", "dmg"],
+      "artifactName": "Lumen-macOS-${arch}.${ext}"
+    },
+    "asar": true
+  }
+}
