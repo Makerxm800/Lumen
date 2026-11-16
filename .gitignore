@@ -4,7 +4,8 @@ __pycache__/
 .venv/
 venv/
 
-# Rust and packaging outputs
+# JavaScript dependencies, Rust and packaging outputs
+**/node_modules/
 **/target/
 build/
 dist/
