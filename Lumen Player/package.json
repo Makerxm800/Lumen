@@ -8,12 +8,13 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node --test electron/*.test.js",
+    "test": "node --test electron/*.test.js renderer/*.test.js",
     "dist": "electron-builder"
   },
   "devDependencies": {
     "electron": "^45.3.2",
-    "electron-builder": "^26.18.0"
+    "electron-builder": "^26.18.0",
+    "jsdom": "^31.0.1"
   },
   "overrides": {
     "minimatch": "^11.0.8"
@@ -33,14 +34,24 @@
     ],
     "win": {
       "icon": "icon.ico",
-      "extraResources": [{"from": "runtime", "to": "runtime"}],
-      "target": ["zip"],
+      "extraResources": [
+        {
+          "from": "runtime",
+          "to": "runtime"
+        }
+      ],
+      "target": [
+        "zip"
+      ],
       "artifactName": "Lumen-Windows-x64.${ext}"
     },
     "mac": {
       "icon": "icon.icns",
       "category": "public.app-category.video",
-      "target": ["zip", "dmg"],
+      "target": [
+        "zip",
+        "dmg"
+      ],
       "artifactName": "Lumen-macOS-${arch}.${ext}"
     },
     "asar": true

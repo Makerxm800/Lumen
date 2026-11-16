@@ -728,8 +728,10 @@ async function initialize() {
     } catch { state = { ...DEFAULTS }; }
   } else {
     try {
-      const saved = JSON.parse(localStorage.getItem("lumen-state") || "{}"); state = { ...DEFAULTS, ...saved };
-    } catch { state = { ...DEFAULTS }; }
+      const saved = JSON.parse(localStorage.getItem("lumen-state") || "{}");
+      state = { ...DEFAULTS, ...saved };
+      items = (Array.isArray(state.library) ? state.library : []).map((filePath) => itemForPath(filePath)).filter((item) => item.kind !== "unknown");
+    } catch { state = { ...DEFAULTS }; items = []; }
   }
   syncSettings(); renderQueue(); renderLibrary(); drawVisualizer();
   if (API) checkForUpdates(); else { $("#updateStatus").textContent = "Update checks are available in the installed desktop app."; }
