@@ -1,6 +1,6 @@
 # Lumen Player — Electron app
 
-Lumen is a dark, keyboard-friendly desktop media player built with Electron. The interface retains the existing Lumen visual language and native Windows title-bar controls. It scales with the window, animates subtly, and honors reduced-motion preferences.
+Lumen is a modern, dark desktop media player built with Electron. It keeps the native Windows title bar while giving the library and player a cleaner, more spacious layout. The UI adapts to window size, uses restrained motion, and honors reduced-motion preferences.
 
 ## Development
 
@@ -18,11 +18,12 @@ Package the current platform with `npm run dist`. GitHub Actions tests the share
 
 ## Features
 
-- Open individual media files or recursively scan a folder; maintain a persistent library and play queue.
-- Play, pause, previous/next, seek, volume and mute, adjustable playback speed, shuffle, repeat queue/repeat one, and fullscreen.
-- Audio and subtitle selection where tracks are provided by mpv, plus Chromium-supported subtitle tracks.
-- Audio ambient visuals, an optional volume boost, and an optional volume compressor/normalizer.
-- English and French interface options, live library search, and sensible resizing.
+- Add files and recursively scan folders from the Library; the library, queue, sorting choice, and playback preferences persist between launches. Library entries can be removed at any time.
+- Filter by audio/video and sort by recently added, name, or media type.
+- Play, pause, previous/next, seek, volume and mute, speed, shuffle, repeat, audio/subtitle tracks, and fullscreen controls are grouped with the player.
+- Pinch or use zoom controls to inspect supported inline video; pan while zoomed, and compare two browser-playable videos in split view.
+- Ambient visuals, volume boost, volume leveling, and captions are player-side controls rather than a separate settings checklist.
+- English and French interface options, live library search, and responsive sizing.
 - Background GitHub release checks with matching Windows/macOS ZIP downloads saved to Downloads. Packages are installed manually to avoid overwriting an app while it is running.
 - Keyboard shortcuts: Space play/pause, Left/Right seek, Up/Down volume, F fullscreen, M mute, N/P next/previous, Ctrl/Command+O open files, and Ctrl/Command+K search.
 
