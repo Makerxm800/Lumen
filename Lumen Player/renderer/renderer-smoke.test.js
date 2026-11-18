@@ -64,6 +64,31 @@ test("media selection and play/pause controls update the player state", async ()
   dom.window.close();
 });
 
+test("seek thumbnail is isolated from captions and the custom speed menu updates playback", async () => {
+  const dom = bootRenderer();
+  const { document } = dom.window;
+  const preview = document.querySelector("#seekPreviewSource");
+  assert.ok(preview, "a separate, offscreen media source provides preview frames");
+  assert.equal(preview.hidden, true);
+  assert.equal(preview.hasAttribute("muted"), true);
+  assert.equal(preview.querySelector("track"), null, "preview source must not attach subtitle tracks");
+  assert.ok(document.querySelector("#seekPreviewCanvas"));
+  assert.equal(document.querySelector("#annotationsButton"), null, "caption enhancement toggle is removed");
+  assert.ok(document.querySelector("#subtitleButton"), "real subtitle-track controls remain available");
+
+  const trigger = document.querySelector("#speedButton");
+  const menu = document.querySelector("#speedMenu");
+  trigger.click();
+  assert.equal(menu.classList.contains("hidden"), false);
+  assert.equal(trigger.getAttribute("aria-expanded"), "true");
+  document.querySelector('#speedMenu [data-speed="1.5"]').click();
+  assert.equal(document.querySelector("#speedLabel").textContent, "1.5×");
+  assert.equal(document.querySelector('#speedMenu [data-speed="1.5"]').getAttribute("aria-checked"), "true");
+  assert.equal(menu.classList.contains("hidden"), true);
+  assert.equal(document.querySelector("#videoPlayer").playbackRate, 1.5);
+  dom.window.close();
+});
+
 test("video zoom and split comparison controls are usable", async () => {
   const dom = bootRenderer();
   const { window } = dom;

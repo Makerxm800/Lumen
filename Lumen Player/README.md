@@ -20,9 +20,9 @@ Package the current platform with `npm run dist`. GitHub Actions tests the share
 
 - Add files and recursively scan folders from the Library; the library, queue, sorting choice, and playback preferences persist between launches. Library entries can be removed at any time.
 - Filter by audio/video and sort by recently added, name, or media type.
-- Play, pause, previous/next, seek, volume and mute, speed, shuffle, repeat, audio/subtitle tracks, and fullscreen controls are grouped with the player.
+- Play, pause, previous/next, seek, volume and mute, playback speed, shuffle, repeat, audio/subtitle tracks, and fullscreen controls are grouped with the player. Video seeking shows a lightweight frame preview without subtitle overlays.
 - Pinch or use zoom controls to inspect supported inline video; pan while zoomed, and compare two browser-playable videos in split view.
-- Ambient visuals, volume boost, volume leveling, and captions are player-side controls rather than a separate settings checklist.
+- Ambient visuals, volume boost, and volume leveling are player-side controls; subtitle tracks remain available through the CC control.
 - English and French interface options, live library search, and responsive sizing.
 - Background GitHub release checks with matching Windows/macOS ZIP downloads saved to Downloads. Packages are installed manually to avoid overwriting an app while it is running.
 - Keyboard shortcuts: Space play/pause, Left/Right seek, Up/Down volume, F fullscreen, M mute, N/P next/previous, Ctrl/Command+O open files, and Ctrl/Command+K search.

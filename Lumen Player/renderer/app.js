@@ -28,6 +28,7 @@ const ICONS = {
   wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2l2-5 4 10 3-8 2 3h5"/></svg>',
   captions: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 10H8a2 2 0 0 0 0 4h2M16 10h-2a2 2 0 0 0 0 4h2"/></svg>',
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>'
 };
 const FR = {
@@ -70,7 +71,19 @@ let panX = 0;
 let panY = 0;
 let pinchDistance = 0;
 let compareUrl = "";
+let seekPreviewUrl = "";
+let seekPreviewGeneration = 0;
+let seekPreviewPending = null;
+let seekPreviewDesired = null;
+let seekPreviewBusy = false;
+let seekPreviewStep = 1;
+let seekPreviewPosition = 0;
+const seekPreviewCache = new Map();
 const pointerMap = new Map();
+const seekPreviewVideo = $("#seekPreviewSource");
+const seekPreview = $("#seekPreview");
+const seekPreviewCanvas = $("#seekPreviewCanvas");
+const seekPreviewContext = seekPreviewCanvas.getContext("2d");
 const video = $("#videoPlayer");
 const compareVideo = $("#compareVideo");
 const videoSplit = $("#videoSplit");
@@ -196,6 +209,109 @@ function loadMediaElement(element, item) {
   currentUrl = getSource(item);
   element.src = currentUrl;
   element.load();
+  if (element === video) configureSeekPreview(currentUrl);
+}
+function configureSeekPreview(source) {
+  if (!source || source === seekPreviewUrl) return;
+  const generation = ++seekPreviewGeneration;
+  seekPreviewUrl = source;
+  seekPreviewCache.clear();
+  seekPreviewPending = seekPreviewDesired = null;
+  seekPreviewBusy = false;
+  seekPreview.classList.remove("frame-ready", "preview-failed");
+  seekPreviewVideo.onloadedmetadata = () => {
+    if (generation !== seekPreviewGeneration) return;
+    try { [...seekPreviewVideo.textTracks].forEach((track) => { track.mode = "disabled"; }); } catch {}
+    const duration = Number(seekPreviewVideo.duration) || 0;
+    seekPreviewStep = duration > 900 ? 4 : duration > 300 ? 2 : 1;
+    if (!seekPreview.classList.contains("hidden")) requestSeekPreview(seekPreviewPosition);
+  };
+  seekPreviewVideo.src = source;
+  seekPreviewVideo.load();
+}
+function hideSeekPreview() {
+  seekPreview.classList.add("hidden");
+  seekPreviewPending = seekPreviewDesired = null;
+}
+function showSeekPreviewAt(clientX) {
+  if (mode !== "video" || !Number.isFinite(video.duration) || video.duration <= 0) { hideSeekPreview(); return; }
+  const sliderRect = seekSlider.getBoundingClientRect();
+  const rowRect = $("#seekRow").getBoundingClientRect();
+  if (!sliderRect.width || !rowRect.width) return;
+  const ratio = Math.max(0, Math.min(1, (clientX - sliderRect.left) / sliderRect.width));
+  seekPreviewPosition = isSeeking ? Number(seekSlider.value) / 10 : ratio * video.duration;
+  const previewHalfWidth = Math.min(109, Math.max(8, rowRect.width / 2 - 8));
+  const center = Math.max(previewHalfWidth, Math.min(rowRect.width - previewHalfWidth, sliderRect.left - rowRect.left + ratio * sliderRect.width));
+  seekPreview.style.left = `${center}px`;
+  $("#seekPreviewTime").textContent = prettyTime(seekPreviewPosition);
+  seekPreview.classList.remove("hidden");
+  requestSeekPreview(seekPreviewPosition);
+}
+function requestSeekPreview(seconds) {
+  if (mode !== "video" || !seekPreviewUrl || !Number.isFinite(video.duration)) return;
+  const duration = Math.max(0, Number(seekPreviewVideo.duration) || Number(video.duration) || 0);
+  if (!duration) return;
+  const bucket = Math.max(0, Math.min(Math.floor(duration / seekPreviewStep), Math.floor(seconds / seekPreviewStep)));
+  seekPreviewDesired = bucket;
+  if (seekPreviewCache.has(bucket)) {
+    seekPreviewContext.putImageData(seekPreviewCache.get(bucket), 0, 0);
+    seekPreview.classList.add("frame-ready");
+    return;
+  }
+  seekPreview.classList.remove("frame-ready", "preview-failed");
+  if (seekPreviewBusy || seekPreviewVideo.readyState < 1) return;
+  seekPreviewBusy = true;
+  const target = Math.min(duration, bucket * seekPreviewStep);
+  seekPreviewPending = { bucket, generation: seekPreviewGeneration, target };
+  if (Math.abs((Number(seekPreviewVideo.currentTime) || 0) - target) < .02) {
+    requestAnimationFrame(captureSeekPreviewFrame);
+  } else {
+    try { seekPreviewVideo.currentTime = target; }
+    catch { seekPreviewBusy = false; seekPreviewPending = null; }
+  }
+}
+function captureSeekPreviewFrame() {
+  const pending = seekPreviewPending;
+  if (!pending || pending.generation !== seekPreviewGeneration) return;
+  if (Math.abs((Number(seekPreviewVideo.currentTime) || 0) - pending.target) > .2) return;
+  if (seekPreviewVideo.readyState < 2) {
+    seekPreviewVideo.addEventListener("loadeddata", captureSeekPreviewFrame, { once: true });
+    return;
+  }
+  let capturedFrame = false;
+  try {
+    const width = seekPreviewCanvas.width;
+    const height = seekPreviewCanvas.height;
+    const sourceWidth = seekPreviewVideo.videoWidth;
+    const sourceHeight = seekPreviewVideo.videoHeight;
+    if (!sourceWidth || !sourceHeight) throw new Error("Video frame is not ready.");
+    seekPreviewContext.fillStyle = "#080a10";
+    seekPreviewContext.fillRect(0, 0, width, height);
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    const drawWidth = sourceWidth * scale;
+    const drawHeight = sourceHeight * scale;
+    seekPreviewContext.drawImage(seekPreviewVideo, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+    const frame = seekPreviewContext.getImageData(0, 0, width, height);
+    seekPreviewCache.set(pending.bucket, frame);
+    capturedFrame = true;
+    if (seekPreviewCache.size > 28) seekPreviewCache.delete(seekPreviewCache.keys().next().value);
+    if (!seekPreview.classList.contains("hidden") && seekPreviewDesired === pending.bucket) {
+      seekPreviewContext.putImageData(frame, 0, 0);
+      seekPreview.classList.add("frame-ready");
+    }
+  } catch {}
+  if (!capturedFrame) {
+    seekPreview.classList.add("preview-failed");
+    if (seekPreviewDesired === pending.bucket) seekPreviewDesired = null;
+  }
+  seekPreviewPending = null;
+  seekPreviewBusy = false;
+  if (seekPreviewDesired !== null && !seekPreviewCache.has(seekPreviewDesired)) {
+    if (!capturedFrame && seekPreviewDesired === pending.bucket) {
+      seekPreviewDesired = null;
+      seekPreview.classList.add("preview-failed");
+    } else requestSeekPreview(seekPreviewPosition);
+  }
 }
 async function initAudioGraph(element) {
   if (!window.AudioContext && !window.webkitAudioContext) return null;
@@ -254,11 +370,14 @@ function setPausedState(paused) {
 function updateProgress(position, duration) {
   const d = Math.max(0, Number(duration) || 0);
   const p = Math.max(0, Math.min(d || Infinity, Number(position) || 0));
-  $("#currentTime").textContent = prettyTime(p);
+  if (!isSeeking) {
+    $("#currentTime").textContent = prettyTime(p);
+    seekSlider.value = String(Math.floor(p * 10));
+  }
   $("#durationTime").textContent = prettyTime(d);
   seekSlider.max = String(Math.max(1, Math.floor(d * 10)));
-  if (!isSeeking) seekSlider.value = String(Math.floor(p * 10));
-  const pct = d ? `${Math.max(0, Math.min(100, p / d * 100))}%` : "0%";
+  const displayedPosition = isSeeking ? Number(seekSlider.value) / 10 : p;
+  const pct = d ? `${Math.max(0, Math.min(100, displayedPosition / d * 100))}%` : "0%";
   seekSlider.style.setProperty("--range", pct);
   $("#seekSlider").disabled = !d;
 }
@@ -278,8 +397,7 @@ function syncPlaybackOptions() {
   const options = [
     ["ambientButton", state.ambient],
     ["boostButton", state.volumeBoost],
-    ["stableButton", state.stableVolume],
-    ["annotationsButton", state.annotations]
+    ["stableButton", state.stableVolume]
   ];
   for (const [id, active] of options) {
     const button = $(`#${id}`);
@@ -455,6 +573,7 @@ async function playPath(filePath) {
   const index = items.findIndex((item) => item.path === filePath);
   if (index < 0) return;
   const item = items[index];
+  hideSeekPreview(); isSeeking = false;
   clearComparison(); resetZoom();
   if (currentUrl && currentUrl.startsWith("blob:")) URL.revokeObjectURL(currentUrl);
   currentUrl = "";
@@ -545,7 +664,9 @@ async function playPathExternalFallback(item) {
   } catch (error) { showError(error.message); }
 }
 function stopPlayback() {
-  stopMpvPoll();
+  stopMpvPoll(); hideSeekPreview(); isSeeking = false;
+  seekPreviewGeneration++; seekPreviewUrl = ""; seekPreviewCache.clear(); seekPreviewBusy = false;
+  seekPreviewVideo.removeAttribute("src"); seekPreviewVideo.load();
   clearComparison(); resetZoom();
   videoSplit.classList.remove("active"); $("#stageTools").classList.add("hidden");
   video.pause(); audio.pause(); video.classList.remove("active");
@@ -596,9 +717,25 @@ function seekTo(seconds) {
     if (videoSplit.classList.contains("split-visible")) compareVideo.currentTime = value;
   }
 }
+function syncSpeedControl() {
+  const label = `${Number(state.speed)}×`;
+  $("#speedSelect").value = String(state.speed);
+  $("#speedLabel").textContent = label;
+  $("#speedButton").setAttribute("aria-label", `Playback speed ${label}`);
+  $$("#speedMenu [data-speed]").forEach((button) => {
+    const selected = Number(button.dataset.speed) === Number(state.speed);
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-checked", String(selected));
+  });
+}
+function closeSpeedMenu() {
+  $("#speedMenu").classList.add("hidden");
+  $("#speedButton").setAttribute("aria-expanded", "false");
+}
 function setSpeed(value) {
   state.speed = Math.max(.25, Math.min(3, Number(value) || 1));
-  $("#speedSelect").value = String(state.speed);
+  syncSpeedControl();
+  closeSpeedMenu();
   if (mode === "mpv" && API) API.mpvCommand("speed", state.speed).catch(() => {});
   else applyAudioSettings(mode === "audio" ? audio : video);
   if (videoSplit.classList.contains("split-visible")) compareVideo.playbackRate = state.speed;
@@ -623,7 +760,7 @@ function toggleMute() {
 function syncSettings() {
   $("#languageSelect").value = state.language;
   $("#sortSelect").value = state.librarySort || "recent";
-  $("#speedSelect").value = String(state.speed);
+  syncSpeedControl();
   $("#shuffleButton").classList.toggle("selected", state.shuffle);
   $("#repeatButton").classList.toggle("selected", state.repeat > 0);
   $("#repeatOneBadge").classList.toggle("hidden", state.repeat !== 2);
@@ -783,7 +920,12 @@ function wireEvents() {
   $("#ambientButton").onclick = () => togglePlaybackOption("ambient");
   $("#boostButton").onclick = () => togglePlaybackOption("volumeBoost");
   $("#stableButton").onclick = () => togglePlaybackOption("stableVolume");
-  $("#annotationsButton").onclick = () => togglePlaybackOption("annotations");
+  $("#speedButton").onclick = () => {
+    const open = $("#speedMenu").classList.toggle("hidden") === false;
+    $("#speedButton").setAttribute("aria-expanded", String(open));
+    if (open) $(`#speedMenu [data-speed="${state.speed}"]`)?.focus();
+  };
+  $$("#speedMenu [data-speed]").forEach((button) => button.addEventListener("click", () => setSpeed(button.dataset.speed)));
   $("#zoomInButton").onclick = () => setZoom(zoomScale + .25);
   $("#zoomOutButton").onclick = () => setZoom(zoomScale - .25);
   $("#zoomResetButton").onclick = resetZoom;
@@ -798,10 +940,27 @@ function wireEvents() {
     } catch { await document.documentElement.requestFullscreen?.().catch(() => {}); }
   };
   $("#focusExternalButton").onclick = () => { if (API && mode === "mpv") API.mpvCommand("fullscreen").catch(() => {}); };
-  seekSlider.addEventListener("input", () => { isSeeking = true; $("#currentTime").textContent = prettyTime(Number(seekSlider.value) / 10); });
-  seekSlider.addEventListener("change", () => { seekTo(Number(seekSlider.value) / 10); isSeeking = false; });
+  seekPreviewVideo.addEventListener("seeked", captureSeekPreviewFrame);
+  seekSlider.addEventListener("pointerenter", (event) => showSeekPreviewAt(event.clientX));
+  seekSlider.addEventListener("pointermove", (event) => showSeekPreviewAt(event.clientX));
+  seekSlider.addEventListener("pointerdown", (event) => { isSeeking = true; showSeekPreviewAt(event.clientX); });
+  seekSlider.addEventListener("pointerleave", () => { if (!isSeeking) hideSeekPreview(); });
+  seekSlider.addEventListener("blur", () => { if (!isSeeking) hideSeekPreview(); });
+  seekSlider.addEventListener("input", () => {
+    isSeeking = true;
+    $("#currentTime").textContent = prettyTime(Number(seekSlider.value) / 10);
+    const duration = Number(video.duration) || 0;
+    const ratio = duration ? Number(seekSlider.value) / 10 / duration : 0;
+    seekSlider.style.setProperty("--range", `${ratio * 100}%`);
+    const rect = seekSlider.getBoundingClientRect();
+    showSeekPreviewAt(rect.left + ratio * rect.width);
+  });
+  seekSlider.addEventListener("change", () => {
+    seekTo(Number(seekSlider.value) / 10);
+    isSeeking = false;
+    hideSeekPreview();
+  });
   volumeSlider.addEventListener("input", () => setVolume(volumeSlider.value));
-  $("#speedSelect").addEventListener("change", () => setSpeed($("#speedSelect").value));
   $("#librarySearch").addEventListener("input", renderLibrary);
   $("#typeFilter").addEventListener("change", renderLibrary);
   $("#sortSelect").addEventListener("change", () => { state.librarySort = $("#sortSelect").value; persist(); renderLibrary(); });
@@ -826,6 +985,7 @@ function wireEvents() {
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest("#trackMenu") && !event.target.closest("#audioTracksButton") && !event.target.closest("#subtitleButton")) $("#trackMenu").classList.add("hidden");
+    if (!event.target.closest("#speedControl")) closeSpeedMenu();
   });
   document.addEventListener("wheel", (event) => {
     if (event.ctrlKey && mode === "video" && video.contains(event.target)) {
@@ -886,6 +1046,7 @@ function wireEvents() {
     if (mediaFiles.length && mode === "idle") playPath(mediaFiles[0]);
   });
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#speedMenu").classList.contains("hidden")) { closeSpeedMenu(); $("#speedButton").focus(); return; }
     if (event.target.matches("input,textarea,select") || !$("#settingsOverlay").classList.contains("hidden")) {
       if (event.key === "Escape") closeSettings();
       return;
