@@ -19,6 +19,7 @@ const MPV_PATH = process.platform === "win32"
 const DEFAULT_STATE = {
   language: "system",
   library: [],
+  librarySort: "recent",
   volume: 80,
   speed: 1,
   repeat: 0,
@@ -164,6 +165,7 @@ async function saveState(state) {
   const safe = {
     ...DEFAULT_STATE,
     language: ["system", "en", "fr"].includes(state.language) ? state.language : "system",
+    librarySort: ["recent", "name-asc", "name-desc", "type"].includes(state.librarySort) ? state.librarySort : "recent",
     volume: Math.max(0, Math.min(state.volumeBoost ? 130 : 100, Number(state.volume) || 0)),
     speed: Math.max(0.25, Math.min(3, Number(state.speed) || 1)),
     repeat: Math.max(0, Math.min(2, Number(state.repeat) || 0)),

@@ -3,28 +3,31 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0a0a11" />
+  <meta name="theme-color" content="#0b0d14" />
   <title>Lumen Player</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand-mark" aria-label="Lumen"><span class="brand-glyph">◢</span><span class="brand-name">L U M E N</span></div>
+      <a class="brand-mark" href="#player" aria-label="Lumen Player"><span class="brand-glyph">◢</span><span class="brand-name">LUMEN</span></a>
       <nav class="nav-stack" aria-label="Main navigation">
         <button class="nav-item active" data-page="player" title="Player"><span class="nav-icon" data-icon="play"></span><span>Player</span></button>
         <button class="nav-item" data-page="library" title="Library"><span class="nav-icon" data-icon="library"></span><span>Library</span></button>
       </nav>
+      <div class="sidebar-now">
+        <div class="sidebar-art" data-icon="music"></div>
+        <span class="sidebar-caption">NOW PLAYING</span>
+        <strong id="sidebarTrack">Nothing playing</strong>
+        <span id="sidebarTrackType">Your library</span>
+      </div>
       <div class="sidebar-foot"><span class="status-dot"></span><span>READY</span></div>
     </aside>
 
     <main class="workspace">
       <header class="topbar">
-        <div class="topbar-title"><span class="eyebrow">LUMEN / MEDIA PLAYER</span><h1 id="pageHeading">Now Playing</h1></div>
-        <div class="topbar-actions">
-          <button id="addMediaButton" class="icon-button" aria-label="Add media" title="Open media"><span data-icon="plus"></span></button>
-          <button id="settingsButton" class="icon-button" aria-label="Settings" title="Settings"><span data-icon="settings"></span></button>
-        </div>
+        <div class="topbar-title"><div class="breadcrumb"><span>LUMEN</span><span class="crumb-slash">/</span><span>MEDIA PLAYER</span></div><h1 id="pageHeading">Now Playing</h1></div>
+        <div class="topbar-actions"><span class="topbar-status"><span class="status-dot"></span>LOCAL LIBRARY</span><button id="settingsButton" class="icon-button settings-trigger" aria-label="Settings" title="Settings"><span data-icon="settings"></span></button></div>
       </header>
 
       <section id="playerPage" class="page player-page">
@@ -36,23 +39,42 @@
                 <div id="emptyState" class="empty-state">
                   <div class="empty-orbit orbit-one"></div><div class="empty-orbit orbit-two"></div>
                   <div class="empty-disc"><span data-icon="play"></span></div>
-                  <p>Open a media file to begin</p>
+                  <span class="empty-kicker">YOUR PERSONAL MEDIA SPACE</span>
+                  <p>Choose something from your library to begin</p>
+                  <button id="emptyLibraryButton" class="stage-cta"><span data-icon="library"></span> Browse library</button>
                 </div>
-                <video id="videoPlayer" class="media-element" playsinline></video>
+                <div id="videoSplit" class="video-split">
+                  <div class="video-pane primary-pane"><span class="pane-label">MAIN</span><video id="videoPlayer" class="media-element" playsinline></video></div>
+                  <div id="comparePane" class="video-pane compare-pane hidden"><span class="pane-label">COMPARE</span><video id="compareVideo" class="media-element" playsinline muted></video></div>
+                </div>
                 <div id="externalPlayback" class="external-playback hidden">
                   <div class="external-icon" data-icon="video"></div>
-                  <strong>Video is playing in Lumen</strong>
-                  <span>This format is using the full mpv playback engine.</span>
+                  <strong>Video is playing in mpv</strong>
+                  <span>This format uses Lumen’s full playback engine.</span>
                   <button id="focusExternalButton" class="secondary-button">Toggle video fullscreen</button>
                 </div>
                 <div class="stage-badge"><span class="live-pulse"></span><span id="stageMode">READY</span></div>
+                <div id="stageTools" class="stage-tools hidden">
+                  <button id="zoomOutButton" class="stage-tool" aria-label="Zoom out" title="Zoom out"><span data-icon="minus"></span></button>
+                  <span id="zoomReadout" class="zoom-readout">100%</span>
+                  <button id="zoomInButton" class="stage-tool" aria-label="Zoom in" title="Zoom in"><span data-icon="plus"></span></button>
+                  <button id="zoomResetButton" class="stage-tool reset-zoom" title="Reset zoom">Reset</button>
+                  <span class="tool-divider"></span>
+                  <button id="splitButton" class="stage-tool split-trigger" title="Compare with another video"><span data-icon="split"></span><span>Split view</span></button>
+                  <select id="compareSelect" class="compare-select hidden" aria-label="Choose a video to compare"><option value="">Choose video…</option></select>
+                </div>
               </div>
               <div class="now-meta">
-                <div class="track-info"><span class="eyebrow">NOW PLAYING</span><h2 id="trackTitle">Nothing playing</h2><p id="trackPath">Your music and videos, in one place</p></div>
-                <div class="meta-actions">
-                  <button id="scanFolderButton" class="icon-button small" title="Add a folder" aria-label="Add a folder"><span data-icon="folder"></span></button>
-                  <button id="openMediaButton" class="icon-button small" title="Add media" aria-label="Add media"><span data-icon="plus"></span></button>
-                </div>
+                <div class="track-art" data-icon="music"></div>
+                <div class="track-info"><span class="eyebrow">NOW PLAYING</span><h2 id="trackTitle">Nothing playing</h2><p id="trackPath">Your music and videos, together</p></div>
+                <div class="meta-trailing"><span id="mediaTypeBadge" class="media-type-badge">READY</span></div>
+              </div>
+              <div class="player-options" aria-label="Playback enhancements">
+                <span class="options-label">PLAYBACK</span>
+                <button id="ambientButton" class="option-chip active" title="Toggle ambient visuals"><span data-icon="sparkles"></span><span>Ambient</span></button>
+                <button id="boostButton" class="option-chip" title="Allow volume above 100%"><span data-icon="boost"></span><span>Boost</span></button>
+                <button id="stableButton" class="option-chip" title="Reduce loudness changes"><span data-icon="wave"></span><span>Level audio</span></button>
+                <button id="annotationsButton" class="option-chip active" title="Show subtitle tracks"><span data-icon="captions"></span><span>Captions</span></button>
               </div>
             </article>
 
@@ -80,21 +102,23 @@
           </section>
 
           <aside class="queue-card">
-            <div class="queue-heading"><div><span class="eyebrow accent">PLAY QUEUE</span><h2>Ready when you are</h2></div><span id="queueCount" class="queue-count">0</span></div>
+            <div class="queue-heading"><div><span class="eyebrow accent">UP NEXT</span><h2>Play queue</h2></div><span id="queueCount" class="queue-count">0</span></div>
             <div id="queueList" class="queue-list"></div>
-            <div id="queueEmpty" class="queue-empty"><span class="empty-queue-icon" data-icon="queue"></span><p>Your queue is empty</p><span>Add a few files and they’ll show up here.</span></div>
-            <button id="queueAddButton" class="queue-add"><span data-icon="plus"></span><span>Add media</span></button>
+            <div id="queueEmpty" class="queue-empty"><span class="empty-queue-icon" data-icon="queue"></span><p>Your queue is empty</p><span>Add media from your library to start listening.</span><button id="queueLibraryButton" class="queue-library-button">Open library <span data-icon="arrow"></span></button></div>
           </aside>
         </div>
       </section>
 
       <section id="libraryPage" class="page library-page hidden">
+        <section class="library-hero"><div><span class="eyebrow accent">YOUR COLLECTION</span><h2>Everything you love,<br/>all in one place.</h2><p>Browse, sort, and play your local media.</p></div><div class="library-hero-art"><span class="hero-orb orb-a"></span><span class="hero-orb orb-b"></span><span class="hero-glyph" data-icon="library"></span><span class="hero-count"><strong id="heroLibraryCount">0</strong><small>ITEMS</small></span></div></section>
         <div class="library-toolbar">
           <label class="search-box"><span data-icon="search"></span><input id="librarySearch" type="search" placeholder="Search your library" autocomplete="off"/><kbd>⌘ K</kbd></label>
-          <button id="libraryAddFiles" class="secondary-button"><span data-icon="plus"></span>Add files</button>
+          <label class="select-wrap"><span class="sr-only">Filter media type</span><select id="typeFilter" class="toolbar-select"><option value="all">All media</option><option value="audio">Audio</option><option value="video">Video</option></select></label>
+          <label class="select-wrap"><span class="sr-only">Sort library</span><select id="sortSelect" class="toolbar-select"><option value="recent">Recently added</option><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="type">Media type</option></select></label>
+          <button id="libraryAddFiles" class="primary-small"><span data-icon="plus"></span>Add files</button>
           <button id="libraryAddFolder" class="secondary-button"><span data-icon="folder"></span>Add folder</button>
         </div>
-        <div class="library-summary"><span id="libraryCount">0 items in your library</span><span id="scanStatus" class="scan-status hidden"><span class="spinner"></span>Scanning in the background…</span></div>
+        <div class="library-summary"><span id="libraryCount">0 items</span><span id="scanStatus" class="scan-status hidden"><span class="spinner"></span>Scanning in the background…</span></div>
         <div id="libraryList" class="library-list"></div>
         <div id="libraryEmpty" class="library-empty"><div class="library-empty-icon" data-icon="library"></div><h2>Your library is ready</h2><p>Add media files or scan a folder to build your collection.</p><button id="libraryEmptyAdd" class="primary-small">Add media</button></div>
       </section>
@@ -103,27 +127,16 @@
 
   <div id="settingsOverlay" class="modal-overlay hidden" role="presentation">
     <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-      <header class="modal-header"><div><span class="eyebrow accent">PERSONALIZE LUMEN</span><h2 id="settingsTitle">Settings</h2></div><button id="closeSettings" class="icon-button" aria-label="Close settings"><span data-icon="close"></span></button></header>
+      <header class="modal-header"><div><span class="eyebrow accent">LUMEN PREFERENCES</span><h2 id="settingsTitle">Settings</h2></div><button id="closeSettings" class="icon-button" aria-label="Close settings"><span data-icon="close"></span></button></header>
       <div class="settings-content">
-        <section class="settings-group"><h3>Preferences</h3>
-          <div class="setting-row"><div class="setting-copy"><strong>Language</strong><span>Choose the interface language.</span></div><select id="languageSelect" class="setting-select"><option value="system">System default</option><option value="en">English</option><option value="fr">Français</option></select></div>
-          <div class="setting-row volume-setting"><div class="setting-copy"><strong>Default volume</strong><span>Wheel over the player to adjust volume.</span></div><input id="settingsVolume" class="range" type="range" min="0" max="100" value="80"/><span id="settingsVolumeLabel" class="setting-value">80%</span></div>
-        </section>
-        <section class="settings-group"><h3>Playback</h3>
-          <label class="toggle-row"><span><strong>Repeat queue</strong><small>Repeat the queue or the current item.</small></span><input id="repeatSetting" type="checkbox"/><span class="switch"></span></label>
-          <label class="toggle-row"><span><strong>Shuffle</strong><small>Pick the next queue item at random.</small></span><input id="shuffleSetting" type="checkbox"/><span class="switch"></span></label>
-          <label class="toggle-row"><span><strong>Ambient visuals</strong><small>Animate the audio backdrop while music plays.</small></span><input id="ambientSetting" type="checkbox"/><span class="switch"></span></label>
-          <label class="toggle-row"><span><strong>Volume boost</strong><small>Allow sound above the usual 100% limit.</small></span><input id="boostSetting" type="checkbox"/><span class="switch"></span></label>
-          <label class="toggle-row"><span><strong>Stable volume</strong><small>Compress loud peaks and quiet passages.</small></span><input id="stableSetting" type="checkbox"/><span class="switch"></span></label>
-          <label class="toggle-row"><span><strong>Subtitles and annotations</strong><small>Show available captions and subtitle tracks.</small></span><input id="annotationsSetting" type="checkbox"/><span class="switch"></span></label>
-        </section>
-        <section class="settings-group update-group"><div class="update-heading"><div><h3>Software updates</h3><p>Checks GitHub in the background.</p></div><span class="version-chip" id="appVersion">v1.3.0</span></div>
+        <section class="settings-group"><h3>General</h3><div class="setting-row"><div class="setting-copy"><strong>Language</strong><span>Choose the interface language.</span></div><select id="languageSelect" class="setting-select"><option value="system">System default</option><option value="en">English</option><option value="fr">Français</option></select></div></section>
+        <section class="settings-group update-group"><div class="update-heading"><div><h3>Software updates</h3><p>Check for the latest Lumen version.</p></div><span class="version-chip" id="appVersion">v1.3.0</span></div>
           <div id="updateStatus" class="update-status">Checking for updates…</div>
           <div class="update-actions"><button id="checkUpdatesButton" class="secondary-button">Check again</button><button id="downloadUpdateButton" class="primary-small hidden">Download update</button><button id="showUpdateButton" class="secondary-button hidden">Show download</button></div>
           <p class="update-hint">Downloaded packages are installed manually; close Lumen, extract the ZIP, and replace the app files.</p>
         </section>
       </div>
-      <footer class="modal-footer"><span>Space: play · ←/→ seek · ↑/↓ volume · F: fullscreen</span><button id="doneSettings" class="primary-small">Done</button></footer>
+      <footer class="modal-footer"><span>Space play · ←/→ seek · ↑/↓ volume · F fullscreen</span><button id="doneSettings" class="primary-small">Done</button></footer>
     </section>
   </div>
 
